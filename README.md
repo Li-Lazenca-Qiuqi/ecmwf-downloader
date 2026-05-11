@@ -10,9 +10,7 @@ ECMWF（European Centre for Medium-Range Weather Forecasts）提供全球领先�
 
 ```
 ECMWF downloader/
-├── .claude/                      # 项目记忆组件
-│   ├── CLAUDE.md                 # 项目提示词
-│   └── LAST_CLAUDE_PROGRESS.md   # 工作进度记录
+├── AGENTS.md                     # 项目级长期记忆
 ├── config/                       # 配置文件目录
 │   ├── *.yaml.example            # 配置模板文件
 │   └── *.yaml                    # 实际配置文件（git忽略）
@@ -37,8 +35,7 @@ ECMWF downloader/
 │   │   ├── dialogs/              # 对话框模块
 │   │   ├── widgets/              # 自定义组件
 │   │   ├── pages/                # 页面模块
-│   │   ├── workers/              # 后台任务
-│   │   └── styles/               # 样式文件
+│   │   └── workers/              # 后台任务
 │   └── utils/                    # 工具模块
 │       └── config_initializer.py # 配置初始化
 ├── tests/                        # 测试目录
@@ -49,11 +46,14 @@ ECMWF downloader/
 └── CHANGELOG.md                  # 版本更新日志
 ```
 
+最后更新：2026-05-11，对应版本：v0.4.1。
+
 ## 技术栈与技术路线
 
 ### 核心技术
 
-- **语言**：Python 3.8+
+- **标准运行环境**：Linux
+- **语言**：Python 3.9+
 - **主要依赖**：
   - `cdsapi` - ECMWF CDS数据下载API客户端
   - `pydantic` - 配置验证和数据模型
@@ -119,25 +119,40 @@ YAML    BaseAPIClient  CDSClient  ProgressManager
   - [x] 存储层抽象（TaskStore）
   - [x] 状态机机制（VALID_TRANSITIONS）
   - [x] 崩溃恢复（reconcile）
-  - [ ] 多文件存储集成
-  - [ ] 队列调度器
+  - [x] 多文件存储集成
+  - [x] 队列调度器
   - [ ] 集成下载Worker与控制按钮
   - [ ] 实现批量下载功能
 
 ## 使用方法
 
-### 安装
+### Linux 环境准备
+
+推荐使用 `uv` 管理虚拟环境与依赖：
 
 ```bash
-pip install -e .
+cd /path/to/ecmwf-downloader
+uv sync --extra dev
+```
+
+如果需要使用 AI 参数生成功能：
+
+```bash
+uv sync --extra dev --extra ai
 ```
 
 ### 运行
 
 ```bash
-ecmwf
+uv run ecmwf
 # 或
-python -m src.ui
+uv run python -m src.ui
+```
+
+### 测试
+
+```bash
+uv run --extra dev pytest
 ```
 
 ### 配置

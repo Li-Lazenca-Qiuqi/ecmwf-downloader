@@ -125,7 +125,7 @@ AI参数生成器，支持自然语言转配置。
 #### app.py
 TUI应用主入口。
 
-- `ECMWFApp`：Textual应用主类
+- `ECMWFDownloaderApp`：Textual应用主类
   - 屏幕管理、主题配置
   - 全局状态管理
   - 配置初始化调用
@@ -139,7 +139,6 @@ TUI应用主入口。
 | `tasks_screen.py` | 任务列表页 |
 | `download_screen.py` | 下载管理页 |
 | `accounts_screen.py` | 账号池管理页 |
-| `config_screen.py` | 配置管理页（兼容层）|
 
 #### dialogs/ - 对话框模块
 
@@ -176,14 +175,6 @@ TUI应用主入口。
 | 文件 | 功能 |
 |------|------|
 | `download_worker.py` | 下载执行Worker |
-
-#### styles/ - 样式文件
-
-| 文件 | 功能 |
-|------|------|
-| `theme.py` | 主题配置 |
-
----
 
 ### utils/ - 工具模块
 
