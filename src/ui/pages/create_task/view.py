@@ -499,12 +499,6 @@ class CreateTaskView(Widget):
         """显示通知"""
         self.notify(message, severity=severity, timeout=timeout)
 
-    # ==================== 兼容性方法 ====================
-
     def refresh_data(self) -> None:
-        """刷新数据（兼容性方法）"""
+        """刷新数据接口。"""
         pass
-
-
-# 兼容性别名
-ConfigContent = CreateTaskView

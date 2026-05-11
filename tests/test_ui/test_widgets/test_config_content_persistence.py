@@ -1,10 +1,10 @@
 """配置保存/加载（新格式）测试。"""
 
 from src.core.dataset_schema import DynamicFormField, FieldType, FormFieldDefinition
-from src.ui.widgets.contents.config_content import ConfigContent
+from src.ui.pages.create_task.mappers import FormConfigMapper
 
 
-class TestConfigContentPersistence:
+class TestFormConfigMapperPersistence:
     """验证配置文件的新格式序列化与反序列化。"""
 
     def test_serialize_field_config_compact_schema(self):
@@ -25,7 +25,7 @@ class TestConfigContentPersistence:
             selected=["lic1"],
         )
 
-        info = ConfigContent._serialize_field_config(field)
+        info = FormConfigMapper.serialize_field(field)
 
         assert set(info.keys()) == {"field_type", "selected", "definition"}
         assert info["field_type"] == "licence"
@@ -47,7 +47,7 @@ class TestConfigContentPersistence:
             },
         }
 
-        state = ConfigContent._deserialize_field_config("area_group", field_info)
+        state = FormConfigMapper.deserialize_field("area_group", field_info)
 
         assert state.field_type == FieldType.EXCLUSIVE_GROUP
         assert state.selected == ["global"]
@@ -74,7 +74,7 @@ class TestConfigContentPersistence:
             },
         }
 
-        state = ConfigContent._deserialize_field_config("product_type", field_info)
+        state = FormConfigMapper.deserialize_field("product_type", field_info)
 
         assert state.field_type == FieldType.STRING_ARRAY
         assert state.values == [

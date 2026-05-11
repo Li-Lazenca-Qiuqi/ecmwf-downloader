@@ -278,8 +278,8 @@ class TestHomeScreenButtonNavigation:
             # 测试环境中可能没有安装accounts screen
             pass
 
-    async def test_btn_config_navigates_to_config_screen(self, home_screen):
-        """测试配置管理按钮导航到配置屏幕"""
+    async def test_btn_config_navigates_to_create_task_page(self, home_screen):
+        """测试配置管理按钮导航到创建任务页面"""
         btn_config = home_screen.query_one("#btn-config", Button)
 
         # 触发点击事件

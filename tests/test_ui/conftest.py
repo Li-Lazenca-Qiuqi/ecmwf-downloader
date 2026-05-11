@@ -80,7 +80,6 @@ def app_instance(temp_config_dir):
     config_dir, data_dir = temp_config_dir
     config_file = config_dir / "default_config.yaml"
     accounts_file = config_dir / "accounts.yaml"
-    progress_file = data_dir / "progress.json"
 
     # 创建最小配置文件
     config_file.write_text("""
@@ -95,13 +94,10 @@ account_pool:
 accounts: []
 """)
 
-    # 创建空的进度文件
-    progress_file.write_text("{}")
-
     app = ECMWFDownloaderApp(
-        config_path=str(config_file),
-        accounts_path=str(accounts_file),
-        progress_path=str(progress_file)
+        config_path=config_file,
+        accounts_path=accounts_file,
+        data_dir=data_dir,
     )
 
     return app

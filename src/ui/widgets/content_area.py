@@ -9,6 +9,7 @@ from typing import Iterable, Optional
 
 import asyncio
 from contextlib import suppress
+from functools import partial
 
 from textual.containers import Container, Vertical
 from textual.events import Key
@@ -99,7 +100,7 @@ class ContentArea(Vertical):
                 self._switch_worker.cancel()
             # exclusive=True 确保同组只跑一个（减少并发 DOM 操作）
             self._switch_worker = self.run_worker(
-                self._apply_content(serial),
+                partial(self._apply_content, serial),
                 name="content-switch",
                 group="content-switch",
                 exclusive=True,
@@ -121,7 +122,7 @@ class ContentArea(Vertical):
             if self._switch_worker is not None and self._switch_worker.is_running:
                 self._switch_worker.cancel()
             self._switch_worker = self.run_worker(
-                self._apply_content(serial),
+                partial(self._apply_content, serial),
                 name="content-clear",
                 group="content-switch",
                 exclusive=True,

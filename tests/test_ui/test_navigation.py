@@ -26,7 +26,6 @@ def temp_files(tmp_path):
 
     config_file = config_dir / "default_config.yaml"
     accounts_file = config_dir / "accounts.yaml"
-    progress_file = data_dir / "progress.json"
 
     # 创建最小配置文件
     config_file.write_text("""
@@ -44,12 +43,10 @@ accounts:
     status: active
 """)
 
-    progress_file.write_text("{}")
-
     return {
         "config_path": config_file,
         "accounts_path": accounts_file,
-        "progress_path": progress_file,
+        "data_dir": data_dir,
     }
 
 
@@ -59,7 +56,7 @@ async def app_instance(temp_files):
     app = ECMWFDownloaderApp(
         config_path=temp_files["config_path"],
         accounts_path=temp_files["accounts_path"],
-        progress_path=temp_files["progress_path"],
+        data_dir=temp_files["data_dir"],
     )
 
     async with app.run_test() as pilot:
@@ -74,32 +71,30 @@ class TestAppInitialization:
         app = ECMWFDownloaderApp(
             config_path=temp_files["config_path"],
             accounts_path=temp_files["accounts_path"],
-            progress_path=temp_files["progress_path"],
+            data_dir=temp_files["data_dir"],
         )
 
         assert app._config_path == temp_files["config_path"]
         assert app._accounts_path == temp_files["accounts_path"]
-        assert app._progress_path == temp_files["progress_path"]
+        assert app._data_dir == temp_files["data_dir"]
 
     async def test_app_creates_data_dir_if_not_exists(self, tmp_path):
         """测试自动创建数据目录"""
         data_dir = tmp_path / "nonexistent" / "data"
-        progress_file = data_dir / "progress.json"
 
         app = ECMWFDownloaderApp(
-            progress_path=progress_file,
+            data_dir=data_dir,
         )
 
         # 验证目录被创建
         assert data_dir.exists()
 
-    async def test_app_has_content_widgets_initialized(self):
-        """测试所有内容Widget已初始化"""
+    async def test_app_uses_content_area_navigation(self):
+        """测试应用使用内容区域导航架构"""
         app = ECMWFDownloaderApp()
 
-        # 新架构使用_content_widgets字典而不是SCREENS
-        assert hasattr(app, "_content_widgets")
-        # 需要在on_mount后才会初始化，所以这里测试属性存在
+        assert hasattr(app, "action_switch_page")
+        assert not hasattr(app, "_content_widgets")
 
     async def test_app_has_key_bindings(self):
         """测试快捷键绑定已配置"""
@@ -218,26 +213,18 @@ class TestAppNavigation:
             assert False, "action_switch_page导致RecursionError"
 
 
-class TestLazyLoading:
-    """测试延迟加载"""
+class TestServiceInitialization:
+    """测试服务初始化"""
 
-    async def test_account_pool_lazy_loads_on_first_access(self, app_instance):
-        """测试账号池延迟加载"""
+    async def test_account_pool_initialized_by_queue_scheduler_on_mount(self, app_instance):
+        """测试启动时队列调度器会初始化账号池"""
         app, pilot = app_instance
-        # 初始状态为None
-        assert app._account_pool is None
 
-        # 第一次访问时加载（已有测试账号，应该成功）
-        try:
-            pool = app.account_pool
-            assert pool is not None
-            assert app._account_pool is not None
-        except Exception:
-            # 账号池初始化可能失败（配置问题）
-            pass
+        assert app._account_pool is not None
+        assert app.account_pool is app._account_pool
 
-    async def test_progress_manager_lazy_loads(self, app_instance):
-        """测试进度管理器延迟加载"""
+    async def test_progress_manager_available_after_mount(self, app_instance):
+        """测试进度管理器在挂载后可用"""
         app, pilot = app_instance
         # 访问时加载
         manager = app.progress_manager
@@ -289,7 +276,7 @@ class TestCreateAppHelper:
         app = create_app(
             config_path=temp_files["config_path"],
             accounts_path=temp_files["accounts_path"],
-            progress_path=temp_files["progress_path"],
+            data_dir=temp_files["data_dir"],
         )
 
         assert isinstance(app, ECMWFDownloaderApp)

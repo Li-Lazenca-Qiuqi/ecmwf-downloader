@@ -10,7 +10,4 @@
 from .view import CreateTaskView
 from .controller import CreateTaskController
 
-# 兼容性别名
-ConfigContent = CreateTaskView
-
-__all__ = ["CreateTaskView", "CreateTaskController", "ConfigContent"]
+__all__ = ["CreateTaskView", "CreateTaskController"]
