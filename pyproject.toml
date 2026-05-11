@@ -41,7 +41,7 @@ name = "ecmwf-downloader"
 version = "0.2.1"
 description = "ECMWF气象数据下载工具"
 readme = "README.md"
-requires-python = ">=3.8"
+requires-python = ">=3.9"
 dependencies = [
     "cdsapi>=0.7.0",
     "requests>=2.31.0",
@@ -49,6 +49,7 @@ dependencies = [
     "pydantic-settings>=2.1.0",
     "PyYAML>=6.0.1",
     "ecmwf-datastores-client>=0.4.0",
+    "textual>=7.0.0",
 ]
 
 [project.optional-dependencies]
@@ -64,6 +65,10 @@ ai = [
 
 [project.scripts]
 ecmwf = "src.ui.__main__:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["src*"]
 
 [build-system]
 requires = ["setuptools>=68.0", "wheel"]
