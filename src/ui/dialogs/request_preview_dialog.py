@@ -57,7 +57,7 @@ class RequestPreviewDialog(BaseDialog):
 
     RequestPreviewDialog #summary-area {
         padding: 1;
-        background: $panel 20%;
+        background: transparent;
     }
 
     RequestPreviewDialog #summary-area Label {
@@ -77,7 +77,7 @@ class RequestPreviewDialog(BaseDialog):
     }
 
     RequestPreviewDialog #code-content {
-        background: $panel 10%;
+        background: transparent;
     }
 
     RequestPreviewDialog .dialog-actions {

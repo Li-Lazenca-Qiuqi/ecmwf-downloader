@@ -53,28 +53,33 @@ class ECMWFDownloaderApp(App):
     # 全局 CSS 样式
     CSS = """
     /* =============================================================
-       主题变量 - 深色主题 + 青绿强调
+       主题变量 - 终端原生灰度主题
 
-       采用中性深灰背景，青绿色作为强调色，增强视觉对比度
+       保持背景透明，尽量使用终端自身底色，只保留必要的灰度层级。
        ============================================================= */
-    $bg: #0d1117;
-    $panel: #161b22;
-    $panel-lighten-1: #21262d;
-    $surface: #1c2128;
-    $border: #30363d;
+    $bg: ansi_default;
+    $panel: #666666;
+    $panel-lighten-1: #888888;
+    $surface: ansi_default;
+    $border: #777777;
 
-    $text: #f0f6fc;
-    $text-muted: #8b949e;
+    $text: ansi_default;
+    $text-muted: #a8a8a8;
 
-    $primary: #58a6ff;
-    $accent: #3fb950;
-    $success: #3fb950;
-    $warning: #d29922;
-    $error: #f85149;
+    $primary: #d0d0d0;
+    $accent: #d0d0d0;
+    $success: #d0d0d0;
+    $warning: #b8b8b8;
+    $error: #d0d0d0;
 
     /* =============================================================
        基础布局
        ============================================================= */
+    App {
+        background: $bg;
+        color: $text;
+    }
+
     Screen {
         background: $bg;
         color: $text;
@@ -93,14 +98,14 @@ class ECMWFDownloaderApp(App):
     }
 
     #content-container {
-        background: $bg;
+        background: transparent;
     }
 
     /* =============================================================
        Header / Footer
        ============================================================= */
     Header {
-        background: $primary;
+        background: transparent;
         color: $text;
         text-align: center;
         text-style: bold;
@@ -108,7 +113,7 @@ class ECMWFDownloaderApp(App):
     }
 
     Footer {
-        background: $panel;
+        background: transparent;
         color: $text-muted;
         padding: 0 1;
     }
@@ -143,42 +148,42 @@ class ECMWFDownloaderApp(App):
         min-width: 8;
         padding: 0 2;
         margin: 0 1;
-        background: $panel;
+        background: transparent;
         color: $text;
-        border: wide $panel;
+        border: wide $border;
         text-style: none;
         text-align: center;
     }
 
     Button:hover {
-        background: $primary 20%;
-        border: wide $primary;
+        background: transparent;
+        border: wide #a8a8a8;
         text-style: bold;
     }
 
     Button:focus {
-        background: $primary 15%;
-        border: wide $accent;
+        background: transparent;
+        border: wide #e6e6e6;
         text-style: bold;
     }
 
     Button:disabled {
-        background: $panel 50%;
-        border: wide $panel 50%;
+        background: transparent;
+        border: wide $border 50%;
         color: $text 50%;
         opacity: 0.6;
     }
 
     /* 按钮变体样式 */
     Button.-primary {
-        background: $primary;
-        border: wide $primary;
+        background: transparent;
+        border: wide #e6e6e6;
         text-style: bold;
     }
 
     Button.-primary:hover {
-        background: $primary 80%;
-        border: wide $primary 80%;
+        background: transparent;
+        border: wide #e6e6e6;
     }
 
     /* =============================================================
@@ -208,41 +213,41 @@ class ECMWFDownloaderApp(App):
        表格（DataTable / TaskTable / AccountTable）
        ============================================================= */
     DataTable {
-        border: thick $panel;
-        background: $bg 90%;
+        border: thick $border;
+        background: transparent;
         color: $text;
     }
 
     DataTable > .datatable--header {
-        background: $panel;
+        background: transparent;
         color: $text;
         text-style: bold;
-        border-bottom: thick $accent;
+        border-bottom: thick $border;
         padding: 0 1;
     }
 
     DataTable > .datatable--header:hover {
-        background: $panel 80%;
+        background: transparent;
     }
 
     DataTable > .datatable--cursor {
-        background: $primary 40%;
+        background: transparent;
         color: $text;
         text-style: bold;
-        border-left: thick $accent;
+        border-left: thick #e6e6e6;
     }
 
     DataTable > .datatable--hover {
-        background: $primary 15%;
+        background: transparent;
         text-style: bold;
     }
 
     DataTable > .datatable--even-row {
-        background: $surface;
+        background: transparent;
     }
 
     DataTable > .datatable--odd-row {
-        background: $surface 90%;
+        background: transparent;
     }
 
     /* =============================================================
@@ -284,10 +289,10 @@ class ECMWFDownloaderApp(App):
     HomeContent .stat-card {
         width: 1fr;
         height: auto;
-        border: solid $panel;
+        border: solid $border;
         padding: 1;
         margin: 0;
-        background: $panel 30%;
+        background: transparent;
     }
 
     HomeContent .stat-card:last-child {
@@ -414,10 +419,10 @@ class ECMWFDownloaderApp(App):
     DownloadContent #progress-card {
         width: 1fr;
         height: auto;
-        border: solid $panel;
+        border: solid $border;
         padding: 1 0;
         margin: 1 0;
-        background: $panel 30%;
+        background: transparent;
     }
 
     DownloadContent #progress-row {
@@ -526,7 +531,7 @@ class ECMWFDownloaderApp(App):
     AccountsContent #accounts-table {
         width: 1fr;
         height: 1fr;
-        border: solid $panel;
+        border: solid $border;
         margin: 1 0;
     }
 
@@ -555,8 +560,8 @@ class ECMWFDownloaderApp(App):
        通知样式
        ============================================================= */
     Notification {
-        background: $panel;
-        border: tall $accent;
+        background: transparent;
+        border: tall $border;
         padding: 1 2;
     }
 

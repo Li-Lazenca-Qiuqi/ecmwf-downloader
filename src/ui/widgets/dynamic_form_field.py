@@ -67,7 +67,7 @@ class DynamicFieldWidget(Vertical):
         min-height: 3;
         margin-top: 0;
         border: round $panel;
-        background: $panel 25%;
+        background: transparent;
         color: $text;
         text-style: bold;
         padding: 0 1;
@@ -75,7 +75,7 @@ class DynamicFieldWidget(Vertical):
 
     .field-select:focus {
         border: round $panel;
-        background: $panel 40%;
+        background: transparent;
     }
 
     .field-select-quick {
@@ -85,7 +85,7 @@ class DynamicFieldWidget(Vertical):
         margin-top: 0;
         margin-left: 0;
         border: round $panel;
-        background: $panel 25%;
+        background: transparent;
         color: $text;
         text-style: bold;
         padding: 0 1;
@@ -93,7 +93,7 @@ class DynamicFieldWidget(Vertical):
 
     .field-select-quick:focus {
         border: round $panel;
-        background: $panel 40%;
+        background: transparent;
     }
 
     .field-hint {

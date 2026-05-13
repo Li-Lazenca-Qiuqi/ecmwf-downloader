@@ -42,13 +42,13 @@ class NavigationSidebar(Vertical):
 
     DEFAULT_CSS = """
     /* ═══════════════════════════════════════════════════════════════
-       导航侧边栏容器 - 深色背景 + 右侧边框
+       导航侧边栏容器 - 透明背景 + 右侧边框
        ═══════════════════════════════════════════════════════════════ */
     NavigationSidebar {
         width: 28;
         dock: left;
-        background: $panel;
-        border-right: thick $accent;
+        background: transparent;
+        border-right: thick $border;
         padding: 0;
     }
 
@@ -89,23 +89,23 @@ class NavigationSidebar(Vertical):
 
     /* 悬停效果 - 柔和高亮 */
     NavigationSidebar Button:hover {
-        background: $primary 15%;
+        background: transparent;
         text-style: bold;
         color: $text;
     }
 
     /* 激活状态 - 高亮背景 */
     NavigationSidebar Button.-active {
-        background: $primary 50%;
+        background: transparent;
         text-style: bold;
-        color: $accent;
-        border: solid $accent;
+        color: $text;
+        border: solid #a8a8a8;
     }
 
     /* 激活状态悬停 - 增强效果 */
     NavigationSidebar Button.-active:hover {
-        background: $primary 60%;
-        border: solid $accent;
+        background: transparent;
+        border: solid #e6e6e6;
     }
 
     /* ═══════════════════════════════════════════════════════════════
