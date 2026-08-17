@@ -1,0 +1,18 @@
+# ECMWF Downloader 0.5.0 非敏感配置
+database_path: data/ecmwf.sqlite3
+config_dir: config
+
+download:
+  output_dir: data/downloads
+  max_workers: 4
+  max_retries: 3
+  retry_delays: [5, 15, 60]
+  poll_interval: 0.5
+  overwrite: false
+
+ai:
+  enabled: false
+  base_url: https://api.openai.com/v1
+  model: gpt-4o-mini
+  temperature: 0.3
+  timeout: 120

@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.5.0 2026.08.17 CLI + Web 架构重构
+
+### 重大变更
+
+- 移除 Textual TUI、`src/ui/` 及对应 UI 测试，入口改为 `ecmwf_downloader` 标准包。
+- 新增 Typer CLI、FastAPI `/api/v1` REST/SSE 和 React + TypeScript + Vite 管理台；前端静态产物随 wheel 发布。
+- 用 SQLAlchemy + SQLite（WAL、外键、busy timeout）替代多文件任务 JSON，新增任务事件、调度租约、账号运行状态和请求模板表。
+- 下载 Worker 脱离 UI，使用数据库租约、心跳、崩溃恢复、`.part` 文件和原子重命名。
+- 请求模型改为通用 `dataset_id + request_payload`，支持不拆分、按年、按月；取消只在安全点生效，首版不提供暂停/续传。
+- CDS/AI 凭据迁移到独立且权限为 `0600` 的 `config/secrets.yaml`，接口和日志不返回完整密钥。
+
+### 不兼容说明
+
+- Python 最低版本提升至 3.11；版本号提升至 0.5.0。
+- 新版本使用全新 SQLite 数据库，不导入旧 YAML/JSON 任务历史，也不自动删除旧配置和任务文件。
+- 旧 TUI 命令不再提供；请使用 `ecmwf web`、`ecmwf worker` 或 `ecmwf task ...`。
+
 ## 0.4.1 2026.02.23 队列调度器集成与多选修复
 
 ### 新增功能

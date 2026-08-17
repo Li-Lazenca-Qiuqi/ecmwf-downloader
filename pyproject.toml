@@ -38,10 +38,10 @@ skip_covered = false
 
 [project]
 name = "ecmwf-downloader"
-version = "0.2.1"
+version = "0.5.0"
 description = "ECMWF气象数据下载工具"
 readme = "README.md"
-requires-python = ">=3.9"
+requires-python = ">=3.11"
 dependencies = [
     "cdsapi>=0.7.0",
     "requests>=2.31.0",
@@ -49,7 +49,11 @@ dependencies = [
     "pydantic-settings>=2.1.0",
     "PyYAML>=6.0.1",
     "ecmwf-datastores-client>=0.4.0",
-    "textual>=7.0.0",
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.30.0",
+    "typer>=0.12.0",
+    "sqlalchemy>=2.0.0",
+    "alembic>=1.13.0",
 ]
 
 [project.optional-dependencies]
@@ -58,17 +62,21 @@ dev = [
     "pytest-cov>=4.1.0",
     "pytest-mock>=3.12.0",
     "pytest-asyncio>=0.21.0",
+    "httpx>=0.27.0",
 ]
 ai = [
     "openai>=1.0.0",
 ]
 
 [project.scripts]
-ecmwf = "src.ui.__main__:main"
+ecmwf = "ecmwf_downloader.interfaces.cli:app"
 
 [tool.setuptools.packages.find]
-where = ["."]
-include = ["src*"]
+where = ["src"]
+include = ["ecmwf_downloader*"]
+
+[tool.setuptools.package-data]
+ecmwf_downloader = ["web/static/**/*"]
 
 [build-system]
 requires = ["setuptools>=68.0", "wheel"]

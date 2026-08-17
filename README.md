@@ -1,185 +1,135 @@
 # ECMWF Downloader
 
-一个用于自动化下载ECMWF（欧洲中期天气预报中心）气象数据的Python工具。
+ECMWF/CDS 气象数据下载管理工具。0.5.0 起项目采用本机单用户的 CLI + Web 架构：Typer CLI 和 FastAPI 管理台共享 SQLite、配置、账号池和唯一调度器租约，前端构建产物随 Python wheel 发布。
 
-## 项目背景信息
+## 能力概览
 
-ECMWF（European Centre for Medium-Range Weather Forecasts）提供全球领先的气象数据和预报服务。本项目旨在开发一个便捷的工具，帮助研究人员和开发者高效获取ECMWF Climate Data Store (CDS)中的气象数据，支持气象研究、气候分析和业务应用。
+- 通用 `dataset_id + request_payload` CDS 请求，不把请求限制为固定 ERA5 字段。
+- `none`、按年、按月三种拆分策略；缺少拆分字段时在预览阶段报校验错误。
+- SQLite WAL、事务化状态机和事件表：`pending → queued → running → completed/failed/retry_wait/cancelling/cancelled`。
+- 数据库租约保证同一工作区只有一个 Worker 消费队列；租约过期时恢复遗留任务并清理 `.part` 文件。
+- 下载写入 `.part`，成功后原子重命名；目标文件默认冲突，只有显式 `--overwrite` 才覆盖。
+- 账号和 AI 凭据独立存放在权限为 `0600` 的 `config/secrets.yaml`，API、CLI 和日志不输出完整密钥。
+- SSE `/api/v1/events` 将 CLI、Web、Worker 的任务事件同步到管理台。
+- 首版支持取消，不提供暂停或可靠断点续传；总大小未知时不伪造百分比。
 
-## 目录结构
+## 快速开始
 
-```
-ECMWF downloader/
-├── AGENTS.md                     # 项目级长期记忆
-├── config/                       # 配置文件目录
-│   ├── *.yaml.example            # 配置模板文件
-│   └── *.yaml                    # 实际配置文件（git忽略）
-├── src/                          # 源代码目录
-│   ├── api/                      # API抽象层
-│   │   ├── base.py               # API客户端基类
-│   │   ├── cds_client.py         # CDS API客户端
-│   │   └── ecmwf_datastores_client.py
-│   ├── core/                     # 核心业务逻辑层
-│   │   ├── exceptions.py         # 自定义异常类
-│   │   ├── config.py             # Pydantic配置模型
-│   │   ├── account_pool.py       # 账号池管理
-│   │   ├── progress.py           # 进度管理器
-│   │   ├── request_builder.py    # 请求构建器
-│   │   ├── task_service.py       # 任务服务
-│   │   ├── ai_config.py          # AI配置
-│   │   ├── ai_generator.py       # AI参数生成
-│   │   └── dataset_schema.py     # 数据集模式
-│   ├── ui/                       # 用户界面层
-│   │   ├── app.py                # TUI应用主入口
-│   │   ├── screens/              # 屏幕模块
-│   │   ├── dialogs/              # 对话框模块
-│   │   ├── widgets/              # 自定义组件
-│   │   ├── pages/                # 页面模块
-│   │   └── workers/              # 后台任务
-│   └── utils/                    # 工具模块
-│       └── config_initializer.py # 配置初始化
-├── tests/                        # 测试目录
-│   ├── test_core/                # 核心模块测试
-│   ├── test_api/                 # API模块测试
-│   └── test_ui/                  # UI模块测试
-├── README.md                     # 项目说明
-└── CHANGELOG.md                  # 版本更新日志
-```
-
-最后更新：2026-05-11，对应版本：v0.4.1。
-
-## 技术栈与技术路线
-
-### 核心技术
-
-- **标准运行环境**：Linux
-- **语言**：Python 3.9+
-- **主要依赖**：
-  - `cdsapi` - ECMWF CDS数据下载API客户端
-  - `pydantic` - 配置验证和数据模型
-  - `PyYAML` - YAML配置文件解析
-  - `pytest` - 单元测试框架
-  - `textual` - TUI终端界面框架
-  - `openai` - AI参数生成（可选依赖）
-
-### 技术架构
-
-```
-配置层 → API抽象层 → 数据下载层 → 进度管理层
-  ↓         ↓           ↓            ↓
-YAML    BaseAPIClient  CDSClient  ProgressManager
-```
-
-### 技术路线
-
-1. 使用ECMWF Climate Data Store (CDS) API进行数据请求
-2. 支持多种气象数据集（ERA5、ERA5-Land等）
-3. 提供YAML配置文件管理下载参数
-4. 实现多账号轮换和并发下载
-5. 支持断点续传和进度持久化
-6. 支持AI自然语言转参数配置
-
-## 当前状态
-
-**版本**：v0.4.1
-
-**阶段**：第五阶段（下载功能集成）**进行中**
-
-**已实现功能**：
-- ✅ 核心模块（异常类、配置模型、账号池、进度管理、存储层）
-- ✅ API抽象层（基类、CDS客户端、ECMWF客户端）
-- ✅ 请求构建与任务服务
-- ✅ AI参数生成（支持自然语言转配置）
-- ✅ TUI终端界面（首页、任务、下载、账号、配置页面）
-- ✅ 账号管理（添加/编辑/启用/禁用/删除）
-- ✅ 配置管理（创建任务 + 预览功能）
-- ✅ 配置初始化（example模板自动复制）
-- ✅ 任务持久化（崩溃恢复）
-- ✅ 任务状态扩展（QUEUED 入队状态）
-- ✅ 存储层抽象（TaskStore 接口）
-- ✅ 状态机机制（合法转换校验）
-- ✅ 崩溃恢复（启动时自动修复状态）
-- ✅ 队列调度器（并发限流、账号分配）
-
-## 工作阶段
-
-- [x] 第一阶段：核心模块重构
-- [x] 第二阶段：TUI基础框架
-- [x] 第三阶段：TUI测试与完善
-- [x] 第四阶段：功能完善与优化
-- [ ] 第五阶段：核心下载功能集成
-  - [x] 请求构建器模块
-  - [x] 任务服务模块
-  - [x] 请求预览对话框
-  - [x] AI参数生成功能
-  - [x] 账号系统重构（uid→email）
-  - [x] 配置系统重构（example模板）
-  - [x] 任务持久化与观察者重构
-  - [x] 任务状态扩展（QUEUED）
-  - [x] 存储层抽象（TaskStore）
-  - [x] 状态机机制（VALID_TRANSITIONS）
-  - [x] 崩溃恢复（reconcile）
-  - [x] 多文件存储集成
-  - [x] 队列调度器
-  - [ ] 集成下载Worker与控制按钮
-  - [ ] 实现批量下载功能
-
-## 使用方法
-
-### Linux 环境准备
-
-推荐使用 `uv` 管理虚拟环境与依赖：
+需要 Python 3.11+ 和 Linux。开发环境推荐使用 uv：
 
 ```bash
-cd /path/to/ecmwf-downloader
 uv sync --extra dev
+uv run ecmwf --help
 ```
 
-如果需要使用 AI 参数生成功能：
+源码开发时构建管理台（发布 wheel 已包含 `web/static`）：
 
 ```bash
-uv sync --extra dev --extra ai
+cd frontend
+npm install
+npm run build
+cd ..
 ```
 
-### 运行
+添加 CDS 账号后启动 Web 管理台：
 
 ```bash
-uv run ecmwf
-# 或
-uv run python -m src.ui
+uv run ecmwf account add analyst@example.com --key 'your-cds-key'
+uv run ecmwf web                 # 127.0.0.1:8000，包含默认 Worker
 ```
 
-### 测试
+浏览器打开 <http://127.0.0.1:8000>。若只运行独立 Worker：
 
 ```bash
-uv run --extra dev pytest
+uv run ecmwf worker
 ```
 
-### 配置
+## CLI 示例
 
-首次运行会自动从 `config/*.yaml.example` 复制生成配置文件：
-- `config/default_config.yaml` - 主配置文件
-- `config/accounts.yaml` - 账号池配置
-- `config/ai_config.yaml` - AI功能配置
+```bash
+# 数据集与请求预览
+uv run ecmwf dataset list
+uv run ecmwf request preview --dataset reanalysis-era5-pressure-levels \
+  --set variable='[temperature]' --set year='[2024]' --split month
 
-## 资源
+# 创建、入队、查看和取消任务
+uv run ecmwf task create --dataset reanalysis-era5-pressure-levels \
+  --request-file request.yaml --split month --enqueue --json
+uv run ecmwf task list --json
+uv run ecmwf task run TASK_ID --wait
+uv run ecmwf task watch TASK_ID --json
+uv run ecmwf task cancel TASK_ID
 
-### 官方资源
+# 所有查询命令都可以使用 --json；配置和模板也可由 CLI 管理
+uv run ecmwf account list --json
+uv run ecmwf config show --json
+uv run ecmwf config set-ai-key
+```
 
-- [ECMWF Climate Data Store](https://cds.climate.copernicus.eu/) - 数据下载平台
-- [CDS API使用指南](https://cds.climate.copernicus.eu/api-how-to) - API配置教程
-- [ECMWF数据集目录](https://cds.climate.copernicus.eu/datasets) - 可用数据集列表
+请求文件是任意 YAML/JSON 对象，例如：
 
-### 开发资源
+```yaml
+variable: [temperature, geopotential]
+year: [2024]
+month: ["01", "02"]
+time: ["00:00", "12:00"]
+data_format: netcdf
+download_format: unarchived
+```
 
-- [cdsapi Python库文档](https://pypi.org/project/cdsapi/)
-- [ECMWF API文档](https://confluence.ecmwf.int/display/CKB/Climate+Data+Store+%28CDS%29+API)
-- [ERA5数据文档](https://confluence.ecmwf.int/display/CKB/ERA5+data+documentation)
+## HTTP API
 
-## 许可证
+FastAPI 以 `/api/v1` 提供版本化接口：
 
-待定
+- `/health`、`/summary`
+- `/datasets`、`/datasets/{id}/schema`
+- `/requests/preview`、`/ai/suggestions`
+- `/tasks` 以及 enqueue/cancel/retry/delete/batch actions
+- `/accounts`、`/templates`、`/settings`
+- `/events` SSE（支持 `Last-Event-ID` 重连）
 
-## 联系方式
+错误响应使用 `application/problem+json`。服务默认只监听 `127.0.0.1`，首版不包含认证、跨域、局域网或公网暴露能力。
 
-待定
+## 配置和数据
+
+- `config/app.yaml`：非敏感下载、并发、重试和 AI 开关。
+- `config/secrets.yaml`：CDS/AI 凭据，自动以 `0600` 权限创建并通过锁文件和原子替换更新。
+- `config/app.yaml.example`、`config/secrets.yaml.example`：可提交的结构示例，不包含真实密钥。
+- `data/ecmwf.sqlite3`：任务、事件、租约、账号运行状态和模板。
+- `data/downloads/`：下载目标及临时 `.part` 文件。
+
+新版本使用全新的 SQLite 数据库，不迁移旧 YAML/JSON 任务历史，也不会自动删除旧文件；磁盘上已有的下载文件会保留但不会被导入为历史任务。
+
+## 开发和测试
+
+```bash
+uv run pytest
+uv build
+```
+
+前端验证：
+
+```bash
+cd frontend
+npm run build
+```
+
+发布前应验证 wheel 在无 Node 环境下可执行 `ecmwf --help`，并由 `ecmwf web` 返回完整 SPA。
+
+## 架构
+
+```text
+src/ecmwf_downloader/
+├── domain/                 # 状态、DTO 和不依赖框架的规则
+├── application/            # 请求、任务、账号、数据集和 Worker 用例
+├── infrastructure/         # SQLAlchemy/SQLite、CDS、密钥文件
+├── interfaces/cli/         # Typer 命令
+├── interfaces/http/        # FastAPI REST + SSE
+└── web/static/             # Vite 构建产物（随 wheel 发布）
+```
+
+## 官方资源
+
+- [ECMWF Climate Data Store](https://cds.climate.copernicus.eu/)
+- [CDS API 使用指南](https://cds.climate.copernicus.eu/api-how-to)
+- [cdsapi](https://pypi.org/project/cdsapi/)

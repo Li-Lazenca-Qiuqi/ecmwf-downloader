@@ -1,0 +1,8 @@
+include README.md
+include CHANGELOG.md
+recursive-include src/ecmwf_downloader/web/static *
+recursive-include migrations *.py
+prune src/ui
+prune src/api
+prune src/core
+prune src/utils

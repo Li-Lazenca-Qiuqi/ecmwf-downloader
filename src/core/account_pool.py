@@ -48,8 +48,10 @@ class AccountPool:
         if config_file is not None:
             self.load_from_file(config_file)
 
-        # 注意：允许空账号池，用户可以在 UI 中添加账号
-        # 延迟验证在 get_next_account() 方法中实现
+        # 旧核心 API 保持“无账号即配置错误”的契约；新 CLI/Web 使用
+        # ecmwf_downloader.application.AccountService，可从空池开始添加账号。
+        if not self.accounts:
+            raise AccountPoolError("账号池为空", available_count=0)
 
     def load_from_file(self, config_file: Path) -> None:
         """从YAML文件加载账号配置
