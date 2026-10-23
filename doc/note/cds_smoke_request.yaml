@@ -1,0 +1,11 @@
+# 对应 acceptance_2026-10-07.md；area 顺序为 North, West, South, East，单位为 degree。
+# dataset_id: reanalysis-era5-single-levels。时间为 UTC；此文件仅保存 request_payload。
+product_type: [reanalysis]
+variable: [2m_temperature]
+year: ["2024"]
+month: ["01"]
+day: ["01"]
+time: ["00:00"]
+area: [31, 120, 30, 121]
+data_format: netcdf
+download_format: unarchived
