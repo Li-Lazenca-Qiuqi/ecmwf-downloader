@@ -172,7 +172,12 @@ def create_app(container: Optional[AppContainer] = None, *, with_worker: bool = 
 
     @app.post("/api/v1/accounts")
     def add_account(body: AccountCreateBody):
-        return app_container.accounts.add(**body.model_dump()).model_dump(mode="json")
+        return app_container.accounts.add(
+            email=body.email,
+            key=body.key,
+            url=body.url,
+            account_id=body.id,
+        ).model_dump(mode="json")
 
     @app.patch("/api/v1/accounts/{account_id}")
     def update_account(account_id: str, body: AccountUpdateBody):

@@ -1,10 +1,40 @@
 from pathlib import Path
+from uuid import UUID
 
+import pytest
 from fastapi.testclient import TestClient
 
 from ecmwf_downloader.application.container import AppContainer
 from ecmwf_downloader.config import AppSettings
 from ecmwf_downloader.interfaces.http.app import create_app
+
+
+@pytest.mark.parametrize("account_id", [None, "explicit-test-account"])
+def test_api_add_account_preserves_id_and_hides_key(tmp_path: Path, account_id):
+    container = AppContainer(AppSettings(database_path=tmp_path / "db.sqlite3", config_dir=tmp_path / "config"))
+    payload = {"email": "test@example.com", "key": "test-secret-key", "url": "https://example.invalid"}
+    if account_id is not None:
+        payload["id"] = account_id
+
+    with TestClient(create_app(container, with_worker=False)) as client:
+        created = client.post("/api/v1/accounts", json=payload)
+        assert created.status_code == 200
+        account = created.json()
+        if account_id is None:
+            assert str(UUID(account["id"])) == account["id"]
+        else:
+            assert account["id"] == account_id
+        assert account["email"] == payload["email"]
+        assert account["status"] == "active"
+        assert "key" not in account
+        assert payload["key"] not in created.text
+
+        listed = client.get("/api/v1/accounts")
+        assert listed.status_code == 200
+        assert listed.json()["items"] == [account]
+        assert payload["key"] not in listed.text
+        stored = container.secrets.get_account(account["id"])
+        assert stored is not None and stored["key"] == payload["key"]
 
 
 def test_api_create_preview_and_cancel(tmp_path: Path):
