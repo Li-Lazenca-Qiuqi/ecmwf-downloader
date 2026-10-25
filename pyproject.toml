@@ -9,7 +9,7 @@ addopts = [
     "-v",                     # 详细输出
     "--strict-markers",       # 严格标记检查
     "--tb=short",            # 简短的traceback
-    "--cov=src",             # 生成覆盖率报告
+    "--cov=ecmwf_downloader", # 当前应用包的覆盖率
     "--cov-report=term-missing",  # 覆盖率报告格式
     "--cov-report=html",     # HTML覆盖率报告
 ]
@@ -23,7 +23,7 @@ filterwarnings = [
 ]
 
 [tool.coverage.run]
-source = ["src"]
+source = ["ecmwf_downloader"]
 omit = [
     "*/tests/*",
     "*/test_*.py",
@@ -53,7 +53,6 @@ dependencies = [
     "uvicorn[standard]>=0.30.0",
     "typer>=0.12.0",
     "sqlalchemy>=2.0.0",
-    "alembic>=1.13.0",
 ]
 
 [project.optional-dependencies]
