@@ -48,10 +48,11 @@ def test_api_create_preview_and_cancel(tmp_path: Path):
         assert len(preview.json()["items"]) == 2
         created = client.post(
             "/api/v1/tasks",
-            json={"dataset_id": "test", "request_payload": {"year": [2024]}, "enqueue": False},
+            json={"dataset_id": "test", "request_payload": {"year": [2024]}},
         )
         assert created.status_code == 200
         task_id = created.json()["items"][0]["id"]
+        assert created.json()["items"][0]["status"] == "queued"
         assert client.post(f"/api/v1/tasks/{task_id}/enqueue").json()["status"] == "queued"
         assert client.post(f"/api/v1/tasks/{task_id}/cancel").json()["status"] == "cancelled"
         assert client.post("/api/v1/tasks/actions/delete", json={"task_ids": [task_id]}).json() == {"affected": 1}

@@ -18,15 +18,12 @@ def container(tmp_path: Path):
 
 def test_task_transitions_write_events(container):
     task = container.tasks.create(dataset_id="test", request_payload={"x": 1})[0]
-    assert task.status == TaskStatus.PENDING
-    queued = container.tasks.enqueue(task.id)
-    assert queued.status == TaskStatus.QUEUED
+    assert task.status == TaskStatus.QUEUED
     cancelled = container.tasks.cancel(task.id)
     assert cancelled.status == TaskStatus.CANCELLED
     events = container.tasks_repository.events_after(0)
     assert [event["event_type"] for event in events] == [
         "task.created",
-        "task.status_changed",
         "task.status_changed",
     ]
 
@@ -81,13 +78,12 @@ def test_scheduler_lease_allows_only_one_owner(tmp_path: Path):
 
 def test_retry_resets_backoff_counters(container):
     task = container.tasks.create(dataset_id="test", request_payload={})[0]
-    container.tasks.enqueue(task.id)
     claimed = container.tasks_repository.claim_next("worker")
     assert claimed is not None
     failed = container.tasks_repository.finish_failure(task.id, "temporary")
     assert failed.status == TaskStatus.RETRY_WAIT
     container.tasks_repository.transition(task.id, TaskStatus.RUNNING, worker_id="worker")
     container.tasks_repository.transition(task.id, TaskStatus.FAILED, error_message="final")
-    retried = container.tasks.retry(task.id, enqueue=False)
-    assert retried.status == TaskStatus.PENDING
+    retried = container.tasks.retry(task.id)
+    assert retried.status == TaskStatus.QUEUED
     assert retried.retry_count == 0

@@ -137,9 +137,12 @@ class Database:
         Base.metadata.create_all(self.engine)
 
     @contextmanager
-    def session(self) -> Iterator[Session]:
+    def session(self, *, immediate: bool = False) -> Iterator[Session]:
         session = Session(self.engine, expire_on_commit=False)
         try:
+            if immediate:
+                # 在读取可变状态前串行化写操作，防止取消与领取、完成互相覆盖。
+                session.connection().exec_driver_sql("BEGIN IMMEDIATE")
             yield session
             session.commit()
         except Exception:

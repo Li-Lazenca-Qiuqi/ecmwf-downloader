@@ -18,7 +18,6 @@ def test_scheduler_executes_a_queued_task(tmp_path: Path, monkeypatch):
 
     monkeypatch.setattr(CDSProvider, "download", fake_download)
     task = container.tasks.create(dataset_id="test", request_payload={}, output_dir=tmp_path / "downloads")[0]
-    container.tasks.enqueue(task.id)
     scheduler = DownloadScheduler(container, poll_interval=0.02)
     assert scheduler.start()
     try:

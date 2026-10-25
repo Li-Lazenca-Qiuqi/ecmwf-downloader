@@ -24,15 +24,18 @@ class DownloadEngine:
 
     def execute(self, task_id: str, account: dict) -> None:
         task = self.container.tasks.get(task_id)
-        if task is None:
+        if task is not None and task.status == TaskStatus.CANCELLING:
+            self.container.tasks_repository.finish_failure(task_id, "任务已取消")
+            return
+        if task is None or task.status != TaskStatus.RUNNING:
             return
         target = Path(task.output_path)
         part = Path(f"{target}.part")
         if target.exists() and not self._overwrite_allowed(task):
-            self.container.tasks_repository.transition(
+            self.container.tasks_repository.finish_failure(
                 task_id,
-                TaskStatus.FAILED,
-                error_message=f"目标文件已存在: {target}",
+                f"目标文件已存在: {target}",
+                retryable=False,
             )
             return
 
@@ -66,13 +69,16 @@ class DownloadEngine:
                 return
             if not part.exists():
                 raise ProviderError("CDS 下载完成但未生成文件")
-            os.replace(part, target)
-            size = target.stat().st_size
-            self.container.tasks_repository.update_progress(
-                task_id, downloaded_bytes=size, total_bytes=size, progress=100
-            )
-            self.container.tasks_repository.finish_completed(task_id)
-            self.container.accounts.record_success(account["id"])
+            def publish() -> int:
+                size = part.stat().st_size
+                os.replace(part, target)
+                return size
+
+            finished = self.container.tasks_repository.finish_completed(task_id, publish=publish)
+            if finished.status == TaskStatus.COMPLETED:
+                self.container.accounts.record_success(account["id"])
+            elif part.exists():
+                part.unlink()
         except DownloadCancelled:
             monitor_stop.set()
             monitor.join(timeout=2)
@@ -90,9 +96,10 @@ class DownloadEngine:
                 except OSError:
                     logger.warning("无法清理临时文件: %s", part)
             logger.exception("任务 %s 下载失败", task_id)
-            self.container.accounts.record_failure(account["id"], str(exc))
             try:
-                self.container.tasks_repository.finish_failure(task_id, str(exc))
+                finished = self.container.tasks_repository.finish_failure(task_id, str(exc))
+                if finished.status != TaskStatus.CANCELLED:
+                    self.container.accounts.record_failure(account["id"], str(exc))
             except (KeyError, ValueError):
                 logger.exception("任务 %s 写入失败状态失败", task_id)
 

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
-from typing import Any, Iterable, Optional
+from typing import Any, Callable, Iterable, Optional
 from uuid import uuid4
 
 from sqlalchemy import func, or_, select
@@ -99,7 +99,7 @@ class TaskRepository:
             request_payload=json_dumps(request_payload),
             filename=filename,
             output_path=output_path,
-            status=TaskStatus.PENDING.value,
+            status=TaskStatus.QUEUED.value,
             split_strategy=split_strategy.value,
             max_retries=max_retries,
             overwrite=overwrite,
@@ -178,58 +178,69 @@ class TaskRepository:
         next_retry_at: Optional[datetime] = None,
         worker_id: Optional[str] = None,
     ) -> TaskData:
-        now = _utc_now()
-        with self.database.session() as session:
+        with self.database.session(immediate=True) as session:
             row = session.get(TaskRow, task_id)
             if row is None:
                 raise KeyError(f"任务不存在: {task_id}")
-            current = TaskStatus(row.status)
-            if not can_transition(current, target):
-                raise ValueError(f"非法状态转换: {current.value} -> {target.value}")
-            row.status = target.value
-            row.updated_at = now
-            row.version += 1
-            row.error_message = error_message
-            row.next_retry_at = next_retry_at
-            if target == TaskStatus.RUNNING:
-                row.started_at = row.started_at or now
-                row.worker_id = worker_id
-            if target in {
-                TaskStatus.COMPLETED,
-                TaskStatus.FAILED,
-                TaskStatus.CANCELLED,
-            }:
-                row.completed_at = now
-                row.worker_id = None
-                row.lease_expires_at = None
-            if target == TaskStatus.PENDING:
-                row.cancel_requested = False
-                row.account_id = None
-                row.started_at = None
-                row.completed_at = None
-                row.progress = None
-                row.downloaded_bytes = 0
-                row.total_bytes = None
-                row.retry_count = 0
-                row.next_retry_at = None
-            if target == TaskStatus.CANCELLING:
-                row.cancel_requested = True
-            if target in {TaskStatus.QUEUED, TaskStatus.RETRY_WAIT}:
-                row.cancel_requested = False
-            self._event(
-                session,
-                event_type="task.status_changed",
-                task_id=task_id,
-                payload={
-                    "from": current.value,
-                    "status": target.value,
-                    "error_message": error_message,
-                },
-                now=now,
-            )
-            return self._to_data(row)
+            return self._transition(session, row, target, error_message=error_message,
+                                    next_retry_at=next_retry_at, worker_id=worker_id)
+
+    def _transition(self, session, row: TaskRow, target: TaskStatus, *,
+                    error_message: Optional[str] = None,
+                    next_retry_at: Optional[datetime] = None,
+                    worker_id: Optional[str] = None) -> TaskData:
+        task_id = row.id
+        now = _utc_now()
+        current = TaskStatus(row.status)
+        if not can_transition(current, target):
+            raise ValueError(f"非法状态转换: {current.value} -> {target.value}")
+        row.status = target.value
+        row.updated_at = now
+        row.version += 1
+        row.error_message = error_message
+        row.next_retry_at = next_retry_at
+        if target == TaskStatus.RUNNING:
+            row.started_at = row.started_at or now
+            row.worker_id = worker_id
+        if target in {
+            TaskStatus.COMPLETED,
+            TaskStatus.FAILED,
+            TaskStatus.CANCELLED,
+        }:
+            row.completed_at = now
+            row.worker_id = None
+            row.lease_expires_at = None
+        if target == TaskStatus.PENDING:
+            row.cancel_requested = False
+            row.account_id = None
+            row.started_at = None
+            row.completed_at = None
+            row.progress = None
+            row.downloaded_bytes = 0
+            row.total_bytes = None
+            row.retry_count = 0
+            row.next_retry_at = None
+        if target == TaskStatus.CANCELLING:
+            row.cancel_requested = True
+        if target in {TaskStatus.QUEUED, TaskStatus.RETRY_WAIT}:
+            row.cancel_requested = False
+        self._event(
+            session,
+            event_type="task.status_changed",
+            task_id=task_id,
+            payload={
+                "from": current.value,
+                "status": target.value,
+                "error_message": error_message,
+            },
+            now=now,
+        )
+        return self._to_data(row)
 
     def enqueue(self, task_id: str) -> TaskData:
+        task = self.get(task_id)
+        if task is not None and task.status == TaskStatus.QUEUED:
+            return task
         return self.transition(task_id, TaskStatus.QUEUED)
 
     def enqueue_many(self, task_ids: Iterable[str]) -> int:
@@ -243,25 +254,45 @@ class TaskRepository:
         return count
 
     def request_cancel(self, task_id: str) -> TaskData:
-        task = self.get(task_id)
-        if task is None:
-            raise KeyError(f"任务不存在: {task_id}")
-        if task.status in {TaskStatus.PENDING, TaskStatus.QUEUED, TaskStatus.RETRY_WAIT}:
-            return self.transition(task_id, TaskStatus.CANCELLED)
-        if task.status == TaskStatus.RUNNING:
-            return self.transition(task_id, TaskStatus.CANCELLING)
-        if task.status == TaskStatus.CANCELLING:
-            return task
-        raise ValueError(f"任务当前不可取消: {task.status.value}")
+        with self.database.session(immediate=True) as session:
+            row = session.get(TaskRow, task_id)
+            if row is None:
+                raise KeyError(f"任务不存在: {task_id}")
+            current = TaskStatus(row.status)
+            if current in {TaskStatus.CANCELLING, TaskStatus.CANCELLED}:
+                return self._to_data(row)
+            if current in {TaskStatus.PENDING, TaskStatus.QUEUED, TaskStatus.RETRY_WAIT}:
+                return self._transition(session, row, TaskStatus.CANCELLED)
+            if current == TaskStatus.RUNNING:
+                return self._transition(session, row, TaskStatus.CANCELLING)
+            raise ValueError(f"任务当前不可取消: {current.value}")
 
-    def retry(self, task_id: str, *, enqueue: bool = True) -> TaskData:
-        task = self.get(task_id)
-        if task is None:
-            raise KeyError(f"任务不存在: {task_id}")
-        if task.status not in {TaskStatus.FAILED, TaskStatus.CANCELLED}:
-            raise ValueError(f"只能重试失败或取消任务: {task.status.value}")
-        self.transition(task_id, TaskStatus.PENDING)
-        return self.enqueue(task_id) if enqueue else self.get(task_id)  # type: ignore[return-value]
+    def retry(self, task_id: str) -> TaskData:
+        with self.database.session(immediate=True) as session:
+            row = session.get(TaskRow, task_id)
+            if row is None:
+                raise KeyError(f"任务不存在: {task_id}")
+            if row.status not in {TaskStatus.FAILED.value, TaskStatus.CANCELLED.value}:
+                raise ValueError(f"只能重试失败或取消任务: {row.status}")
+            previous = row.status
+            row.status = TaskStatus.QUEUED.value
+            row.cancel_requested = False
+            row.account_id = None
+            row.started_at = None
+            row.completed_at = None
+            row.progress = None
+            row.downloaded_bytes = 0
+            row.total_bytes = None
+            row.retry_count = 0
+            row.next_retry_at = None
+            row.error_message = None
+            row.worker_id = None
+            row.lease_expires_at = None
+            row.updated_at = _utc_now()
+            row.version += 1
+            self._event(session, event_type="task.status_changed", task_id=task_id,
+                        payload={"from": previous, "status": row.status}, now=row.updated_at)
+            return self._to_data(row)
 
     def update_progress(
         self,
@@ -308,7 +339,7 @@ class TaskRepository:
     def claim_next(self, worker_id: str, lease_seconds: int = 60) -> Optional[TaskData]:
         now = _utc_now()
         expires = now + timedelta(seconds=lease_seconds)
-        with self.database.session() as session:
+        with self.database.session(immediate=True) as session:
             candidates = list(
                 session.scalars(
                     select(TaskRow)
@@ -395,46 +426,54 @@ class TaskRepository:
                 recovered.append(row.id)
         return recovered
 
-    def finish_completed(self, task_id: str) -> TaskData:
-        task = self.get(task_id)
-        if task is None:
-            raise KeyError(f"任务不存在: {task_id}")
-        if task.status == TaskStatus.CANCELLING or task.cancel_requested:
-            return self.transition(task_id, TaskStatus.CANCELLED)
-        return self.transition(task_id, TaskStatus.COMPLETED)
-
-    def finish_failure(self, task_id: str, message: str) -> TaskData:
-        task = self.get(task_id)
-        if task is None:
-            raise KeyError(f"任务不存在: {task_id}")
-        if task.status == TaskStatus.CANCELLING:
-            return self.transition(task_id, TaskStatus.CANCELLED, error_message=message)
-        if task.retry_count < task.max_retries:
-            retry_count = task.retry_count + 1
-            delay = self.retry_delays[min(retry_count - 1, len(self.retry_delays) - 1)]
-            retry_at = _utc_now() + timedelta(seconds=delay)
-            now = _utc_now()
-            with self.database.session() as session:
-                row = session.get(TaskRow, task_id)
-                if row is None:
-                    raise KeyError(f"任务不存在: {task_id}")
-                row.retry_count = retry_count
-                row.status = TaskStatus.RETRY_WAIT.value
-                row.next_retry_at = retry_at
-                row.error_message = message
-                row.worker_id = None
-                row.lease_expires_at = None
-                row.updated_at = now
-                row.version += 1
-                self._event(
-                    session,
-                    event_type="task.retry_scheduled",
-                    task_id=task_id,
-                    payload={"status": row.status, "retry_count": retry_count, "next_retry_at": retry_at.isoformat()},
-                    now=now,
-                )
+    def finish_completed(self, task_id: str, publish: Optional[Callable[[], int]] = None) -> TaskData:
+        # 完成与取消共用写事务，先接受的取消会阻止发布最终文件。
+        with self.database.session(immediate=True) as session:
+            row = session.get(TaskRow, task_id)
+            if row is None:
+                raise KeyError(f"任务不存在: {task_id}")
+            if row.status == TaskStatus.CANCELLED.value:
                 return self._to_data(row)
-        return self.transition(task_id, TaskStatus.FAILED, error_message=message)
+            if row.status == TaskStatus.CANCELLING.value:
+                return self._transition(session, row, TaskStatus.CANCELLED)
+            if row.status != TaskStatus.RUNNING.value:
+                raise ValueError(f"任务当前不可完成: {row.status}")
+            if publish is not None:
+                size = publish()
+                row.downloaded_bytes = size
+                row.total_bytes = size
+                row.progress = 100
+                self._event(session, event_type="task.progress", task_id=task_id,
+                            payload={"downloaded_bytes": size, "total_bytes": size, "progress": 100},
+                            now=_utc_now())
+            return self._transition(session, row, TaskStatus.COMPLETED)
+
+    def finish_failure(self, task_id: str, message: str, *, retryable: bool = True) -> TaskData:
+        with self.database.session(immediate=True) as session:
+            row = session.get(TaskRow, task_id)
+            if row is None:
+                raise KeyError(f"任务不存在: {task_id}")
+            if row.status == TaskStatus.CANCELLED.value:
+                return self._to_data(row)
+            if row.status == TaskStatus.CANCELLING.value:
+                return self._transition(session, row, TaskStatus.CANCELLED)
+            if row.status != TaskStatus.RUNNING.value:
+                raise ValueError(f"任务当前不可记录失败: {row.status}")
+            if not retryable or row.retry_count >= row.max_retries:
+                return self._transition(session, row, TaskStatus.FAILED, error_message=message)
+            row.retry_count += 1
+            delay = self.retry_delays[min(row.retry_count - 1, len(self.retry_delays) - 1)]
+            row.next_retry_at = _utc_now() + timedelta(seconds=delay)
+            row.status = TaskStatus.RETRY_WAIT.value
+            row.error_message = message
+            row.worker_id = None
+            row.lease_expires_at = None
+            row.updated_at = _utc_now()
+            row.version += 1
+            self._event(session, event_type="task.retry_scheduled", task_id=task_id,
+                        payload={"status": row.status, "retry_count": row.retry_count,
+                                 "next_retry_at": row.next_retry_at.isoformat()}, now=row.updated_at)
+            return self._to_data(row)
 
     def delete(self, task_id: str) -> bool:
         now = _utc_now()

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, Field
 
@@ -21,7 +21,7 @@ class PreviewBody(BaseModel):
 class TaskCreateBody(PreviewBody):
     max_retries: Optional[int] = Field(default=None, ge=0, le=20)
     overwrite: Optional[bool] = None
-    enqueue: bool = False
+    enqueue: Literal[True] = Field(default=True, deprecated=True)
 
 
 class TaskListQuery(BaseModel):

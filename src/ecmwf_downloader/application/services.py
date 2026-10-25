@@ -62,7 +62,6 @@ class TaskService:
         filename: Optional[str] = None,
         max_retries: Optional[int] = None,
         overwrite: Optional[bool] = None,
-        enqueue: bool = False,
     ) -> list[TaskData]:
         plans = self.builder.build(
             dataset_id=dataset_id,
@@ -83,8 +82,6 @@ class TaskService:
             )
             for plan in plans
         ]
-        if enqueue:
-            tasks = [self.tasks.enqueue(task.id) for task in tasks]
         return tasks
 
     def get(self, task_id: str) -> Optional[TaskData]:
@@ -105,8 +102,8 @@ class TaskService:
     def cancel(self, task_id: str):
         return self.tasks.request_cancel(task_id)
 
-    def retry(self, task_id: str, enqueue: bool = True):
-        return self.tasks.retry(task_id, enqueue=enqueue)
+    def retry(self, task_id: str):
+        return self.tasks.retry(task_id)
 
     def delete(self, task_id: str):
         return self.tasks.delete(task_id)

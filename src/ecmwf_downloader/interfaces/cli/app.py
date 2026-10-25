@@ -169,7 +169,7 @@ def task_create(
     output_dir: Optional[Path] = typer.Option(None, "--output-dir"),
     split: SplitStrategy = typer.Option(SplitStrategy.NONE, "--split"),
     filename: Optional[str] = typer.Option(None),
-    enqueue: bool = typer.Option(False, "--enqueue"),
+    enqueue: bool = typer.Option(False, "--enqueue", hidden=True),
     overwrite: Optional[bool] = typer.Option(None, "--overwrite/--no-overwrite"),
     as_json: bool = typer.Option(False, "--json"),
 ):
@@ -180,11 +180,12 @@ def task_create(
         output_dir=output_dir,
         split_strategy=split,
         filename=filename,
-        enqueue=enqueue,
         overwrite=overwrite,
     )
     values = [task.model_dump(mode="json") for task in tasks]
     _json(values) if as_json else _rows(values, ["id", "dataset_id", "status", "filename"])
+    if not as_json:
+        typer.echo("已加入下载队列；请保持 ecmwf worker 或带调度器的 ecmwf web 在后台运行。")
 
 
 @task_app.command("list")
@@ -212,7 +213,7 @@ def task_show(ctx: typer.Context, task_id: str, as_json: bool = typer.Option(Fal
     _json(task.model_dump(mode="json"))
 
 
-@task_app.command("enqueue")
+@task_app.command("enqueue", hidden=True)
 def task_enqueue(ctx: typer.Context, task_id: str):
     typer.echo(_ctx_container(ctx).tasks.enqueue(task_id).id)
 
@@ -234,10 +235,14 @@ def task_delete(ctx: typer.Context, task_id: str):
     typer.echo("已删除")
 
 
-@task_app.command("run")
+@task_app.command("run", hidden=True)
 def task_run(ctx: typer.Context, task_id: str, wait: bool = typer.Option(False, "--wait")):
     container = _ctx_container(ctx)
-    container.tasks.enqueue(task_id)
+    task = container.tasks.get(task_id)
+    if task is None:
+        raise typer.Exit(code=4)
+    if task.status == TaskStatus.PENDING:
+        container.tasks.enqueue(task_id)
     scheduler = DownloadScheduler(container)
     owns_scheduler = scheduler.start()
     if not wait:

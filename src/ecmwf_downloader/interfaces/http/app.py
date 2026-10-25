@@ -92,6 +92,10 @@ def create_app(container: Optional[AppContainer] = None, *, with_worker: bool = 
         result = app_container.tasks.summary()
         result["scheduler_running"] = bool(scheduler and scheduler.is_running)
         result["active_workers"] = scheduler.active_count if scheduler else 0
+        result["max_workers"] = scheduler.max_workers if scheduler else None
+        result["available_accounts"] = sum(
+            account.status == AccountStatus.ACTIVE for account in app_container.accounts.list()
+        )
         return result
 
     @app.get("/api/v1/tasks")
@@ -117,10 +121,10 @@ def create_app(container: Optional[AppContainer] = None, *, with_worker: bool = 
 
     @app.post("/api/v1/tasks")
     def create_task(body: TaskCreateBody):
-        tasks = app_container.tasks.create(**body.model_dump())
+        tasks = app_container.tasks.create(**body.model_dump(exclude={"enqueue"}))
         return {"items": [_task_json(task) for task in tasks]}
 
-    @app.post("/api/v1/tasks/{task_id}/enqueue")
+    @app.post("/api/v1/tasks/{task_id}/enqueue", include_in_schema=False)
     def enqueue_task(task_id: str):
         return _task_json(app_container.tasks.enqueue(task_id))
 
