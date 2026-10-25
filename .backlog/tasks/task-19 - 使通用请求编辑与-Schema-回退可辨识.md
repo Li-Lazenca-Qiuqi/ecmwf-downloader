@@ -4,6 +4,7 @@ title: 使通用请求编辑与 Schema 回退可辨识
 status: To Do
 assignee: []
 created_date: '2026-10-23T15:01:00Z'
+updated_date: '2026-10-25T08:19:00Z'
 labels:
   - migration
 milestone: m-2
@@ -13,7 +14,7 @@ references:
   - src/ecmwf_downloader/infrastructure/datastores.py
   - frontend/src/App.tsx
 documentation:
-  - doc/PRODUCT.md
+  - .backlog/docs/product/doc-1 - Product.md
 priority: medium
 type: enhancement
 ordinal: 19000

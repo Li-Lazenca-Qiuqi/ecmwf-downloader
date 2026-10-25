@@ -4,6 +4,7 @@ title: 补齐管理台未接线的操作控件
 status: To Do
 assignee: []
 created_date: '2026-10-23T15:01:00Z'
+updated_date: '2026-10-25T08:19:00Z'
 labels:
   - migration
 milestone: m-2
@@ -11,9 +12,9 @@ dependencies: []
 references:
   - frontend/src/App.tsx
   - frontend/src/lib/api.ts
-  - doc/PRODUCT.md
+  - .backlog/docs/product/doc-1 - Product.md
 documentation:
-  - doc/PRODUCT.md
+  - .backlog/docs/product/doc-1 - Product.md
 priority: medium
 type: enhancement
 ordinal: 17000

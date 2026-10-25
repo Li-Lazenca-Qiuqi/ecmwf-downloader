@@ -1,3 +1,20 @@
+---
+id: DRAFT-1
+title: 'PRD: 0.5.0_acceptance'
+status: Draft
+assignee: []
+created_date: '2026-10-25T08:18:00Z'
+updated_date: '2026-10-25T08:18:00Z'
+labels:
+  - requirements
+dependencies: []
+---
+
+## Description
+
+<!-- SECTION:DESCRIPTION:BEGIN -->
+<!-- source: doc/PRD/0.5.0_acceptance.md -->
+
 # 0.5.0 收尾验收
 
 日期：2026-10-07。状态：本轮范围已确认，真实下载存在外部阻塞。来源：用户同意补齐文档、待办并执行真实下载与管理台验收；后续指定使用小请求并允许临时 Playwright 自动化。
@@ -24,3 +41,4 @@
 | 真实下载 | 选定 CDS 请求完成，任务为 completed，`.part` 消失，文件可读；核对 variable、时间、经纬度、单位和缺失值 | 验收记录 |
 
 已发现的旧功能缺口进入 Backlog，本轮不扩展到全部界面重构或调度器重写。真实下载未成功时，不使用 mock、文件存在或本地预览替代科学内容验收。版本、Git 提交、Tag 和外部发布均不在本轮授权内。
+<!-- SECTION:DESCRIPTION:END -->

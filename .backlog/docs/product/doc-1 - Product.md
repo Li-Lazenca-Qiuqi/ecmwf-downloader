@@ -1,6 +1,15 @@
+---
+id: doc-1
+title: Product
+type: specification
+created_date: '2026-10-25T08:18:00Z'
+updated_date: '2026-10-25T08:19:00Z'
+---
+<!-- source: doc/PRODUCT.md -->
+
 # 产品现状
 
-功能核对日期：2026-10-07；记忆系统入口同步：2026-10-23。版本：0.5.0。待办与阶段规划以 `.backlog/tasks/` 和 `.backlog/milestones/` 为准；历史证据见 [验收记录](note/acceptance_2026-10-07.md)，迁移实施说明由 Backlog 的 TASK-1 维护。本次没有重跑历史测试，也没有用户逐项验收结论。
+功能核对日期：2026-10-07；记忆系统入口同步：2026-10-23。版本：0.5.0。待办与阶段规划以 `.backlog/tasks/` 和 `.backlog/milestones/` 为准；历史证据见 [验收记录](<../notes/doc-2 - acceptance_2026-10-07.md>)，迁移实施说明由 Backlog 的 TASK-1 维护。本次没有重跑历史测试，也没有用户逐项验收结论。
 
 ## 定位与环境
 

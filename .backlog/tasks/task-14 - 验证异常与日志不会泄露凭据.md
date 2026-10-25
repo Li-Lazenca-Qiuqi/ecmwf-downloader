@@ -4,6 +4,7 @@ title: 验证异常与日志不会泄露凭据
 status: To Do
 assignee: []
 created_date: '2026-10-23T15:01:00Z'
+updated_date: '2026-10-25T08:19:00Z'
 labels:
   - migration
 milestone: m-1
@@ -13,7 +14,7 @@ references:
   - src/ecmwf_downloader/application/worker.py
   - src/ecmwf_downloader/infrastructure/cds.py
 documentation:
-  - doc/PRODUCT.md
+  - .backlog/docs/product/doc-1 - Product.md
 priority: high
 type: task
 ordinal: 14000

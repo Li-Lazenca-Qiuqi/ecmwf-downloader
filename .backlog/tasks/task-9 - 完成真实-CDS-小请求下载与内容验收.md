@@ -4,6 +4,7 @@ title: 完成真实 CDS 小请求下载与内容验收
 status: To Do
 assignee: []
 created_date: '2026-10-23T15:00:00Z'
+updated_date: '2026-10-25T08:19:00Z'
 labels:
   - migration
   - blocked
@@ -12,9 +13,9 @@ milestone: m-0
 dependencies: []
 references:
   - doc/note/cds_smoke_request.yaml
-  - doc/PRD/0.5.0_acceptance.md
+  - .backlog/drafts/draft-1 - PRD-0.5.0_acceptance.md
 documentation:
-  - doc/PRODUCT.md
+  - .backlog/docs/product/doc-1 - Product.md
 priority: high
 type: task
 ordinal: 9000

@@ -4,6 +4,7 @@ title: 使下载格式与文件扩展名一致
 status: To Do
 assignee: []
 created_date: '2026-10-23T15:01:00Z'
+updated_date: '2026-10-25T08:19:00Z'
 labels:
   - migration
 milestone: m-2
@@ -11,7 +12,7 @@ dependencies: []
 references:
   - src/ecmwf_downloader/application/request_builder.py
 documentation:
-  - doc/PRODUCT.md
+  - .backlog/docs/product/doc-1 - Product.md
 priority: medium
 type: bug
 ordinal: 20000

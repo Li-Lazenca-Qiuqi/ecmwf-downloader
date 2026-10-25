@@ -1,6 +1,15 @@
+---
+id: doc-2
+title: acceptance_2026-10-07
+type: guide
+created_date: '2026-10-25T08:19:00Z'
+updated_date: '2026-10-25T08:19:00Z'
+---
+<!-- source: doc/note/acceptance_2026-10-07.md -->
+
 # 0.5.0 验收记录
 
-日期：2026-10-07。范围见 [PRD](../PRD/0.5.0_acceptance.md)，原清单已迁入 Backlog，实施说明由 TASK-1 维护；旧清单及重复迁移文件已按用户要求删除。核对基线为 `5f25c98`；当轮保留工作区改动，没有 Git 提交、版本更新或发布。
+日期：2026-10-07。范围见 [PRD](<../../drafts/draft-1 - PRD-0.5.0_acceptance.md>)，原清单已迁入 Backlog，实施说明由 TASK-1 维护；旧清单及重复迁移文件已按用户要求删除。核对基线为 `5f25c98`；当轮保留工作区改动，没有 Git 提交、版本更新或发布。
 
 2026-10-23 注：以下是历史实现与技术验证记录，不代表用户验收，不代表本日重新运行。先前已检查的 7 项迁入「待验收」；真实下载仍无通过证据，当前账号状态未重新探测。
 
@@ -69,7 +78,7 @@ Browser plugin not available。用户明确允许临时 Playwright 自动化，�
 
 ## 真实 CDS 下载：外部阻塞
 
-用户已选择小请求：[cds_smoke_request.yaml](cds_smoke_request.yaml)。数据集为 `reanalysis-era5-single-levels`，2m temperature，2024-01-01 00:00 UTC，North/West/South/East = 31/120/30/121 degree，NetCDF、不压缩、不拆分。该文件仅是 request_payload。
+用户已选择小请求：[cds_smoke_request.yaml](../../../doc/note/cds_smoke_request.yaml)。数据集为 `reanalysis-era5-single-levels`，2m temperature，2024-01-01 00:00 UTC，North/West/South/East = 31/120/30/121 degree，NetCDF、不压缩、不拆分。该文件仅是 request_payload。
 
 本轮只检查原有配置的账号数量及文件权限，未输出账号、URL 或密钥。新配置 `secrets.yaml` 与旧 `accounts.yaml` 的账号数量都为 0。未向 CDS 提交下载，没有真实 NetCDF 可供检查，不能标记 completed 或科学内容通过。用户需在本地录入账号并确认该数据集访问条件。
 

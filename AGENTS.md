@@ -8,12 +8,12 @@
 
 ```text
 ecmwf-downloader/
-├── .backlog/                       # 配置、任务看板与里程碑
+├── .backlog/                       # 任务、需求、项目文档与里程碑
 ├── config/                         # app.yaml（非敏感）和 secrets.yaml（凭据）
 ├── data/                           # SQLite 与下载输出
 ├── frontend/                       # React + TypeScript + Vite 源码
 ├── migrations/                     # Alembic 初始迁移
-├── doc/                            # 产品、需求、决策、有效笔记与历史记录
+├── doc/                            # 论文、报告、附件与历史资料
 ├── src/ecmwf_downloader/
 │   ├── domain/                     # 领域模型与状态机
 │   ├── application/                # 用例、请求构建、Worker、组合根
@@ -60,13 +60,13 @@ ecmwf web
 
 ## 文档入口与进度依据
 
-- `doc/PRODUCT.md`：当前实现、支持范围及已知限制。
+- `.backlog/docs/product/doc-1 - Product.md`：当前实现、支持范围及已知限制。
 - `.backlog/config.yml`：项目看板配置；项目名为 `ecmwf-downloader`，Git 集成启用，自动提交关闭。
 - `.backlog/tasks/`：唯一活动任务来源，状态为 `To Do`、`In Progress`、`待验收`、`Done`；外部阻塞写入任务说明和标签。
 - `.backlog/milestones/`：阶段规划和任务归属，不承诺尚未确认的日期或版本号。
-- `doc/PRD/0.5.0_acceptance.md`：0.5.0 收尾验收范围与通过标准。
-- `doc/decisions/0001_local_cli_web.md`：现有架构及迁移边界。
-- `doc/note/acceptance_2026-10-07.md`：历史验证证据、真实下载请求与未验证范围，不视为最新实测。
+- `.backlog/drafts/draft-1 - PRD-0.5.0_acceptance.md`：0.5.0 收尾验收范围与通过标准。
+- `.backlog/decisions/decision-1 - 0001_local_cli_web.md`：现有架构及迁移边界。
+- `.backlog/docs/notes/doc-2 - acceptance_2026-10-07.md`：历史验证证据、真实下载请求与未验证范围，不视为最新实测。
 - `TASK-1`：记忆系统与任务看板迁移，实施说明由 Backlog 维护。
 - `doc/archive/README.md`：归档目录使用边界；不保留已迁移的旧清单快照。
 
@@ -74,9 +74,9 @@ ecmwf web
 
 ## Backlog 使用约定
 
-开始工作先检查配置与现有任务，已初始化时不重复运行 `backlog init`，不覆盖配置。任务、草稿、Backlog 文档、决策及里程碑通过 MCP 或 CLI 修改，不直接编辑 `.backlog/` 下的 Markdown；配置列表可按工具要求修改 YAML。
+开始工作先检查配置与现有任务，已初始化时不重复运行 `backlog init`，不覆盖配置。任务、草稿、Backlog 文档、决策及里程碑通过 CLI 修改，不直接编辑 `.backlog/` 下的 Markdown；配置列表可按工具要求修改 YAML。
 
-优先使用 MCP，但必须先确认它属于当前项目。2026-10-23 的会话 MCP 指向其他测试项目，因此本轮使用 WSL 中的 Backlog.md 1.55.2 CLI；后续每次重新核对，不将本轮路由当作永久配置。没有项目内 CLI 时可以使用 `npx --yes --package backlog.md@1.55.2 backlog`，已缓存后可改为 `--offline`；不因此改全局 MCP 配置。
+Backlog 的所有操作统一在 WSL 的仓库根目录使用 CLI，不使用 Backlog MCP；执行前核对当前工作目录与 `.backlog/config.yml`。现有 CLI 基线为 Backlog.md 1.55.2；没有项目内 CLI 时可以使用 `npx --yes --package backlog.md@1.55.2 backlog`，已缓存后可改为 `--offline`。
 
 ```bash
 backlog config get autoCommit
@@ -89,3 +89,14 @@ backlog milestone list
 新增桌面化部分按用户新偏好采用 Electron 包装 Web App，先在 Web 开发并测试；当前项目仍为 CLI + Web，本轮没有引入桌面端或改变架构。提交、版本、Tag 与发布继续分别以用户明确要求为授权；CHANGELOG 只在明确更新版本时修改。
 
 最后更新：2026-10-23。
+
+## Backlog 工作流
+
+- 在仓库根目录通过 CLI 操作，先核对 `.backlog/config.yml`；保留 Git、`auto_commit: false` 和 `待验收` 状态。
+- Drafts 保存完整需求文档，Documents 保存产品说明和专题笔记，Decisions 保存决策；Tasks 与 Milestones 分别管理执行和阶段规划。
+- 需求经用户审查后关联或拆分 Tasks；实现和适用验证后最多转为 `待验收`，验收条件和完成状态由用户决定。
+- Backlog 记录通过 CLI 修改，不直接编辑其 Markdown。
+- 新项目初始化使用 CLI，并指定 `--agent-instructions none` 保留提示词文件。
+- 启动 Dashboard 前检查端口占用；跨 Windows/WSL 时检查两侧。同项目可用服务可复用，否则使用空闲端口及 `--non-interactive`，核实项目和实际地址，保留其他服务进程。
+- 原需求的批准范围、任务编号和验证证据保留；历史测试结果不代表当前工作区已重新通过验证。
+- 论文、研究报告、图片和附件按项目需要保留在原目录。

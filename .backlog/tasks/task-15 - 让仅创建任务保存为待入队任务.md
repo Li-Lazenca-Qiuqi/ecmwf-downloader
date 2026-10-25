@@ -4,6 +4,7 @@ title: 让仅创建任务保存为待入队任务
 status: To Do
 assignee: []
 created_date: '2026-10-23T15:01:00Z'
+updated_date: '2026-10-25T08:19:00Z'
 labels:
   - migration
 milestone: m-2
@@ -12,7 +13,7 @@ references:
   - frontend/src/App.tsx
   - frontend/src/lib/api.ts
 documentation:
-  - doc/PRODUCT.md
+  - .backlog/docs/product/doc-1 - Product.md
 priority: medium
 type: bug
 ordinal: 15000

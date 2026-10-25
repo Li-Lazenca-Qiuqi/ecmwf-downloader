@@ -4,6 +4,7 @@ title: 修复窄屏布局并保留交互回归覆盖
 status: To Do
 assignee: []
 created_date: '2026-10-23T15:02:00Z'
+updated_date: '2026-10-25T08:19:00Z'
 labels:
   - migration
 milestone: m-2
@@ -11,9 +12,9 @@ dependencies: []
 references:
   - frontend/src/App.tsx
   - frontend/src/styles.css
-  - doc/note/acceptance_2026-10-07.md
+  - .backlog/docs/notes/doc-2 - acceptance_2026-10-07.md
 documentation:
-  - doc/PRODUCT.md
+  - .backlog/docs/product/doc-1 - Product.md
 priority: medium
 type: bug
 ordinal: 21000
