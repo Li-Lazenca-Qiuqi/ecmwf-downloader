@@ -1,10 +1,10 @@
 ---
 id: TASK-5
 title: 验证源码测试与生产构建
-status: 待验收
+status: Done
 assignee: []
 created_date: '2026-10-23T15:00:00Z'
-updated_date: '2026-10-25T08:19:00Z'
+updated_date: '2026-10-25T16:02:00Z'
 labels:
   - migration
   - historical-evidence
@@ -16,7 +16,7 @@ documentation:
   - .backlog/docs/notes/doc-2 - acceptance_2026-10-07.md
 priority: medium
 type: task
-ordinal: 5000
+ordinal: 10000
 ---
 
 ## Description

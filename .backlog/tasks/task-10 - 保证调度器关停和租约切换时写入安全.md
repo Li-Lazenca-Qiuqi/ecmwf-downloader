@@ -4,7 +4,7 @@ title: 保证调度器关停和租约切换时写入安全
 status: To Do
 assignee: []
 created_date: '2026-10-23T15:01:00Z'
-updated_date: '2026-10-25T08:19:00Z'
+updated_date: '2026-10-25T15:43:00Z'
 labels:
   - migration
 milestone: m-1
@@ -33,3 +33,9 @@ ordinal: 10000
 - [ ] #2 覆盖运行中关停、重启和租约转移的定向回归
 - [ ] #3 文档明确安全关停与取消边界
 <!-- AC:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+本轮空队列切换本机实例时观察到旧进程在 SIGTERM 后未完全退出，SIGINT 后关闭；启动过早会因旧租约尚未过期导致新实例不消费。等待旧租约过期后重启已恢复。没有活动下载，不涉及真实文件；本次队列简化未扩展修复租约接管/重试启动问题。
+<!-- SECTION:NOTES:END -->

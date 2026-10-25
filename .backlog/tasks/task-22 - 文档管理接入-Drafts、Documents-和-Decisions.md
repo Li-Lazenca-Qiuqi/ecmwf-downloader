@@ -1,17 +1,17 @@
 ---
 id: TASK-22
 title: 文档管理接入 Drafts、Documents 和 Decisions
-status: 待验收
+status: Done
 assignee: []
 created_date: '2026-10-25T08:18:00Z'
-updated_date: '2026-10-25T09:34:00Z'
+updated_date: '2026-10-25T12:39:00Z'
 labels: []
 dependencies: []
 documentation:
   - .backlog/drafts/
   - .backlog/docs/
   - .backlog/decisions/
-ordinal: 22000
+ordinal: 3000
 ---
 
 ## Description

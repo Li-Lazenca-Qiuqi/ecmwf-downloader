@@ -1,10 +1,10 @@
 ---
 id: TASK-4
 title: 恢复管理台新增账号能力
-status: 待验收
+status: Done
 assignee: []
 created_date: '2026-10-23T15:00:00Z'
-updated_date: '2026-10-25T08:19:00Z'
+updated_date: '2026-10-25T16:01:00Z'
 labels:
   - migration
   - historical-evidence
@@ -17,7 +17,7 @@ documentation:
   - .backlog/docs/notes/doc-2 - acceptance_2026-10-07.md
 priority: medium
 type: bug
-ordinal: 4000
+ordinal: 9000
 ---
 
 ## Description

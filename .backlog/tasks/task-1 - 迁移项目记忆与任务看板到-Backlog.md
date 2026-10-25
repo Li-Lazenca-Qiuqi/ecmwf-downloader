@@ -1,17 +1,17 @@
 ---
 id: TASK-1
 title: 迁移项目记忆与任务看板到 Backlog
-status: 待验收
+status: Done
 assignee: []
 created_date: '2026-10-23T14:57:00Z'
-updated_date: '2026-10-23T15:13:00Z'
+updated_date: '2026-10-25T12:38:00Z'
 labels:
   - migration
 milestone: m-0
 dependencies: []
 priority: high
 type: docs
-ordinal: 1000
+ordinal: 2000
 ---
 
 ## Description
