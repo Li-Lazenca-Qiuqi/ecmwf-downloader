@@ -9,7 +9,7 @@ import threading
 from typing import Any, Optional
 from uuid import uuid4
 
-from ecmwf_downloader.application.request_builder import RequestBuilder
+from ecmwf_downloader.application.request_builder import PlannedTask, RequestBuilder
 from ecmwf_downloader.application.request_compiler import compile_request
 from ecmwf_downloader.config import AppSettings
 from ecmwf_downloader.domain.models import AccountData, AccountStatus, SplitStrategy, TaskData, TaskStatus
@@ -43,22 +43,27 @@ class TaskService:
             raise ValueError('请求参数与当前编辑值不一致，请重新预览')
         return compiled
 
-    def preview(
+    def plan(
         self,
         *,
         dataset_id: str,
         request_payload: dict[str, Any],
         split_strategy: SplitStrategy = SplitStrategy.NONE,
+        split_count: int | None = None,
         warnings: Optional[list[str]] = None,
         schema_revision: Optional[str] = None,
         editor_values: Optional[dict[str, Any]] = None,
-    ) -> list[dict[str, Any]]:
-        plans = self.builder.build(
+    ) -> list[PlannedTask]:
+        return self.builder.build(
             dataset_id=dataset_id,
             payload=self.prepare_request(dataset_id, request_payload, schema_revision, editor_values, split_strategy),
             strategy=split_strategy,
+            split_count=split_count,
             warnings=warnings,
         )
+
+    def preview(self, *, dataset_id: str, **options) -> list[dict[str, Any]]:
+        plans = self.plan(dataset_id=dataset_id, **options)
         return [
             {
                 "index": index,
@@ -75,14 +80,18 @@ class TaskService:
         dataset_id: str,
         request_payload: dict[str, Any],
         split_strategy: SplitStrategy = SplitStrategy.NONE,
+        split_count: int | None = None,
         max_retries: Optional[int] = None,
         schema_revision: Optional[str] = None,
         editor_values: Optional[dict[str, Any]] = None,
     ) -> list[TaskData]:
-        plans = self.builder.build(
+        plans = self.plan(
             dataset_id=dataset_id,
-            payload=self.prepare_request(dataset_id, request_payload, schema_revision, editor_values, split_strategy),
-            strategy=split_strategy,
+            request_payload=request_payload,
+            schema_revision=schema_revision,
+            editor_values=editor_values,
+            split_strategy=split_strategy,
+            split_count=split_count,
         )
         tasks = [
             self.tasks.create(

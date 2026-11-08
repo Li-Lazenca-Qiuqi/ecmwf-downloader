@@ -26,6 +26,7 @@ class SplitStrategy(str, Enum):
     YEAR = "year"
     MONTH = "month"
     DAY = "day"
+    SMART = "smart"
 
 class AccountStatus(str, Enum):
     ACTIVE = "active"

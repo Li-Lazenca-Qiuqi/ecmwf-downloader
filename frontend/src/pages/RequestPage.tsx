@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Send, Loader2, ListFilter } from 'lucide-react'
+import { Send, Loader2, ListFilter, FileText } from 'lucide-react'
 import { api, type RequestBody } from '../lib/api'
 import { ErrorNotice, Loading } from '../components'
 import CardSelect from '../CardSelect'
@@ -10,7 +10,7 @@ import FormFields from '../features/request/FormFields'
 import DatasetPicker from '../features/request/DatasetPicker'
 import AIParameterPanel from '../features/request/AIParameterPanel'
 import RequestSizePanel from '../features/request/RequestSizePanel'
-import RequestPreviewCode from '../features/request/RequestPreviewCode'
+import RequestDetailsDialog from '../features/request/RequestDetailsDialog'
 
 const sources = { cds: 'CDS · Copernicus', ncar: 'NCAR AWS ERA5', gdex: 'NCAR GDEX ERA5' }
 const sourceOptions = Object.entries(sources).map(([value, label]) => ({ value: value as keyof typeof sources, label }))
@@ -19,6 +19,7 @@ const splitOptions = [
   { value: 'year', label: '按年' },
   { value: 'month', label: '按月' },
   { value: 'day', label: '按日' },
+  { value: 'smart', label: '按份数智能拆分' },
 ]
 const initialDatasets = { ncar: 'mirror-ncar-era5', gdex: 'mirror-ncar-gdex-era5', cds: 'reanalysis-era5-single-levels' }
 export default function RequestPage() {
@@ -35,6 +36,8 @@ function RequestEditor({ source, onSourceChange }: { source: keyof typeof source
   const [prefix, setPrefix] = useState('e5.oper.an.sfc/202401/')
   const [payload, setPayload] = useState<Payload>({})
   const [split, setSplit] = useState('none')
+  const [splitCount, setSplitCount] = useState('2')
+  const [detailsOpen, setDetailsOpen] = useState(false)
   const [aiNotice, setAiNotice] = useState('')
   const [aiUndo, setAiUndo] = useState<{ payload: Payload; version: number } | null>(null)
   const initialized = useRef('')
@@ -55,10 +58,16 @@ function RequestEditor({ source, onSourceChange }: { source: keyof typeof source
   }, [schema.data, datasetId])
   const errors = fieldErrors(fields, payload)
   const loaded = !!fields.length && schema.data?.source !== 'error'
-  const valid = loaded && !errors.length && datasetInput.trim() === datasetId && (!fileSource || prefixInput.trim() === prefix)
+  const count = Number(splitCount)
+  const countValid = split !== 'smart' || (/^\d+$/.test(splitCount) && Number.isSafeInteger(count) && count >= 2)
+  const valid = loaded && countValid && !errors.length && datasetInput.trim() === datasetId && (!fileSource || prefixInput.trim() === prefix)
   const selection = activeValues(fields, payload)
   const compiled = requestPayload(fields, payload)
-  const body: RequestBody = { dataset_id: datasetId, request_payload: compiled, split_strategy: split, ...(schema.data?.revision ? { schema_revision: schema.data.revision, editor_values: selection } : {}) }
+  const body: RequestBody = {
+    dataset_id: datasetId, request_payload: compiled, split_strategy: split,
+    ...(split === 'smart' && countValid ? { split_count: count } : {}),
+    ...(schema.data?.revision ? { schema_revision: schema.data.revision, editor_values: selection } : {}),
+  }
   const bodyKey = JSON.stringify(body)
   const [stableBody, setStableBody] = useState(bodyKey)
   useEffect(() => { const timer = setTimeout(() => setStableBody(bodyKey), 400); return () => clearTimeout(timer) }, [bodyKey])
@@ -133,9 +142,16 @@ function RequestEditor({ source, onSourceChange }: { source: keyof typeof source
     else void queryClient.fetchQuery({ queryKey: ['request-schema', next, prefix], queryFn: () => api.schema(next, true, prefix), staleTime: 0 })
   }
   const requestNames = new Set(fields.filter((field) => field.request_field).map((field) => field.name))
-  const canSplit = (strategy: string) => schema.data?.capabilities ? schema.data.capabilities.split_strategies.includes(strategy) : (strategy === 'year' ? ['year'] : strategy === 'month' ? ['year', 'month'] : ['year', 'month', 'day']).every((name) => requestNames.has(name) || requestNames.has(`${name}s`))
+  const canSplit = (strategy: string) => {
+    if (schema.data?.capabilities) return schema.data.capabilities.split_strategies.includes(strategy)
+    if (strategy === 'smart') return false
+    const dimensions = strategy === 'year' ? ['year'] : strategy === 'month' ? ['year', 'month'] : ['year', 'month', 'day']
+    return dimensions.every(name => requestNames.has(name) || requestNames.has(`${name}s`))
+  }
   const constraintsReady = stableSelection === selectionKey && !constraints.isFetching && (!!constraints.data || constraints.isError)
-  const canCreate = valid && !schema.isFetching && constraintsReady && !constraintErrors.length && !preview.isError && !!preview.data && stableBody === bodyKey && !preview.isFetching
+  const currentPlan = valid && !preview.isError && stableBody === bodyKey ? preview.data : undefined
+  const planReady = !!currentPlan && !schema.isFetching && !preview.isFetching
+  const canCreate = planReady && constraintsReady && !constraintErrors.length
   return <section className="page request-builder-page">
     <div className="page-heading request-heading">
       <div><h1>提交请求</h1><p>选择数据集和参数，提交后自动监视处理状态。</p></div>
@@ -162,27 +178,47 @@ function RequestEditor({ source, onSourceChange }: { source: keyof typeof source
       </fieldset>
 
     </section>
-    <aside className="request-assistance" aria-label="参数补全、预览与提交">
-      <fieldset className="request-assistance-controls" disabled={create.isPending}>
-        <AIParameterPanel ready={loaded && datasetInput.trim() === datasetId && !schema.isFetching && (!fileSource || prefixInput.trim() === prefix)} pending={suggestion.isPending} error={suggestion.error} notice={aiNotice} canUndo={!!aiUndo && aiUndo.version === version.current}
-          onEdit={editParameters} onGenerate={(prompt) => { setAiNotice(''); setAiUndo(null); suggestion.mutate({ version: version.current, datasetId, prompt, payload: selection }) }}
-          onUndo={() => { if (aiUndo?.version === version.current) { setPayload(aiUndo.payload); version.current += 1; setAiUndo(null); setAiNotice('已恢复补全前的参数。'); create.reset() } }} />
-      </fieldset>
-      {source === 'cds' && <RequestSizePanel datasetId={datasetId} body={body} ready={valid && !schema.isFetching} disabled={create.isPending} split={split} />}
-      <section className="panel request-preview" aria-label="请求预览"><h2>请求预览</h2><p className="helper">{datasetId} · 只读，随选择实时更新</p><RequestPreviewCode payload={compiled} />{errors.length > 0 && loaded && <details className="validation-list"><summary>待补齐 {errors.length} 项参数</summary>{errors.map((message) => <p key={message}>{message}</p>)}</details>}<ErrorNotice error={preview.error} />{preview.isFetching && <p className="helper">正在计算任务预览…</p>}{preview.data && stableBody === bodyKey && <><details className="output-plan"><summary>将提交 {preview.data.items.length} 个请求</summary>{preview.data.warnings?.map((message) => <p className="notice" key={message}>{message}</p>)}<ul className="output-previews">{preview.data.items.slice(0, 20).map((item, index) => <li key={index}>{item.label}</li>)}</ul>{preview.data.items.length > 20 && <p className="helper">仅显示前 20 个请求摘要。</p>}</details></>}</section>
-      <section className="panel request-output" aria-label="请求拆分与提交"><h2>请求拆分与提交</h2>
-        <fieldset disabled={create.isPending}>
-        <section className="output-section" aria-label="请求拆分">
-          <CardSelect label="拆分方式" showLabel value={split} onChange={value => { setSplit(value); create.reset() }}
-            options={splitOptions.map(option => option.value === 'none' || canSplit(option.value) ? option : {
-              ...option, label: `${option.label}（数据集缺少日期字段）`, disabled: true,
-            })} />
-          <p className="helper">结果就绪后，可在请求队列复制链接。</p>
-        </section>
+    <aside className="request-assistance" aria-label="参数补全与提交">
+      <div className="request-assistance-scroll">
+        <fieldset className="request-assistance-controls" disabled={create.isPending}>
+          <AIParameterPanel ready={loaded && datasetInput.trim() === datasetId && !schema.isFetching && (!fileSource || prefixInput.trim() === prefix)} pending={suggestion.isPending} error={suggestion.error} notice={aiNotice} canUndo={!!aiUndo && aiUndo.version === version.current}
+            onEdit={editParameters} onGenerate={(prompt) => { setAiNotice(''); setAiUndo(null); suggestion.mutate({ version: version.current, datasetId, prompt, payload: selection }) }}
+            onUndo={() => { if (aiUndo?.version === version.current) { setPayload(aiUndo.payload); version.current += 1; setAiUndo(null); setAiNotice('已恢复补全前的参数。'); create.reset() } }} />
         </fieldset>
-      <ErrorNotice error={create.error} />
-      <div className="form-actions"><button type="submit" className="button primary" disabled={!canCreate || create.isPending}>{create.isPending ? <Loader2 size={16} className="spin" /> : <Send size={16} />}提交请求{preview.data && canCreate ? `（${preview.data.items.length} 个请求）` : ''}</button><Link className="button" to="/tasks">返回队列</Link></div>
-      </section>
+        <section className="panel request-output" aria-label="请求拆分与提交">
+          <h2>请求拆分与提交</h2>
+          <fieldset disabled={create.isPending}>
+            <section className="output-section" aria-label="请求拆分">
+              <CardSelect label="拆分方式" showLabel value={split} onChange={value => { setSplit(value); create.reset() }}
+                options={splitOptions.map(option => option.value === 'none' || canSplit(option.value) ? option : {
+                  ...option, label: `${option.label}（当前数据集不支持）`, disabled: true,
+                })} />
+              {split === 'smart' && <label className="split-count">目标份数
+                <input type="number" min={2} step={1} value={splitCount} aria-invalid={!countValid}
+                  onChange={event => { setSplitCount(event.target.value); create.reset() }} />
+              </label>}
+              {!countValid && <p className="inline-error" role="alert">请输入大于等于 2 的整数份数。</p>}
+              <p className="helper">结果就绪后，可在请求队列复制链接。</p>
+            </section>
+          </fieldset>
+          {errors.length > 0 && loaded && <details className="validation-list">
+            <summary>待补齐 {errors.length} 项参数</summary>
+            {errors.map(message => <p key={message}>{message}</p>)}
+          </details>}
+          <ErrorNotice error={preview.error} />
+          {preview.isFetching && <p className="helper" role="status">正在计算请求预览…</p>}
+          {currentPlan && <p className="helper">将提交 {currentPlan.items.length} 个请求</p>}
+          {currentPlan?.warnings?.map(message => <p className="notice" key={message}>{message}</p>)}
+          {source === 'cds' && <RequestSizePanel body={body} ready={planReady} disabled={create.isPending} />}
+          <ErrorNotice error={create.error} />
+          <div className="form-actions"><button type="submit" className="button primary" disabled={!canCreate || create.isPending}>{create.isPending ? <Loader2 size={16} className="spin" /> : <Send size={16} />}提交请求{currentPlan && canCreate ? `（${currentPlan.items.length} 个请求）` : ''}</button><Link className="button" to="/tasks">返回队列</Link></div>
+        </section>
+      </div>
+      <div className="panel request-details-footer">
+        <span>{currentPlan ? `${currentPlan.items.length} 个计划请求` : '当前参数草稿'}</span>
+        <button type="button" className="button" aria-haspopup="dialog" aria-expanded={detailsOpen} onClick={() => setDetailsOpen(true)}><FileText size={15} aria-hidden="true" />显示请求详情</button>
+      </div>
+      {detailsOpen && <RequestDetailsDialog datasetId={datasetId} items={currentPlan?.items ?? []} draft={compiled} fields={fields} onClose={() => setDetailsOpen(false)} />}
     </aside></form>
   </section>
 }

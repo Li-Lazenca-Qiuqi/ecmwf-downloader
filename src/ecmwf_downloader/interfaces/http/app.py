@@ -196,6 +196,10 @@ def create_app(container: Optional[AppContainer] = None, *, with_worker: bool = 
 
     @app.post("/api/v1/datasets/{dataset_id}/costing")
     def dataset_costing(dataset_id: str, body: CostingBody):
+        if body.split_strategy != SplitStrategy.NONE or body.split_count is not None:
+            plans = app_container.tasks.plan(dataset_id=dataset_id, **body.model_dump())
+            account = app_container.accounts.next_available()
+            return app_container.datasets.costing_plan(dataset_id, [plan.payload for plan in plans], account)
         selection = app_container.tasks.prepare_request(dataset_id, body.request_payload,
                                                        body.schema_revision, body.editor_values,
                                                        SplitStrategy.NONE)

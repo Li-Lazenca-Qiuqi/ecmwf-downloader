@@ -13,17 +13,15 @@ from ecmwf_downloader.domain.models import AccountData, SplitStrategy, TaskData,
 
 class CostingBody(BaseModel):
     request_payload: dict[str, Any]
+    split_strategy: SplitStrategy = SplitStrategy.NONE
+    split_count: Optional[int] = Field(default=None, strict=True, ge=2)
     schema_revision: Optional[str] = None
     editor_values: Optional[dict[str, Any]] = None
 
 
-class PreviewBody(BaseModel):
+class PreviewBody(CostingBody):
     model_config = ConfigDict(extra="forbid")
     dataset_id: str
-    request_payload: dict[str, Any]
-    split_strategy: SplitStrategy = SplitStrategy.NONE
-    schema_revision: Optional[str] = None
-    editor_values: Optional[dict[str, Any]] = None
 
 
 class TaskCreateBody(PreviewBody):

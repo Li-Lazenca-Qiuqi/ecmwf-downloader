@@ -7,6 +7,13 @@ import hashlib
 import json
 from typing import Any, TypedDict
 
+TIME_AXES = {
+    'year': ('year', 'years'),
+    'month': ('month', 'months'),
+    'day': ('day', 'days'),
+    'time': ('time', 'times', 'hour', 'hours'),
+}
+
 
 class GroupSpec(TypedDict):
     name: str
@@ -65,6 +72,10 @@ def finish_schema(document: dict[str, Any]) -> dict[str, Any]:
     for strategy, required in [('year', {'year'}), ('month', {'year', 'month'}), ('day', {'year', 'month', 'day'})]:
         if required <= names and not any(f.get('field_type') == 'date_range' for f in fields):
             splits.append(strategy)
+    time_names = {name for aliases in TIME_AXES.values() for name in aliases}
+    if ('object_key' not in names and not any(f['field_type'] == 'date_range' for f in fields)
+            and any(f['request_field'] and f['name'] in time_names and f['field_type'] == 'multiple' for f in fields)):
+        splits.append('smart')
     result['capabilities'] = {'split_strategies': splits, 'file_selection': 'object_key' in names,
                               'spatial_modes': [field['field_type'] for field in fields if field['field_type'] in {'area', 'location'}]}
     content = json.dumps({'dataset': result['collection_id'], 'fields': fields, 'groups': groups}, sort_keys=True, ensure_ascii=False)

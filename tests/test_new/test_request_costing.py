@@ -83,3 +83,51 @@ def test_http_costing_checks_revision_and_compiled_payload_without_creating_task
             assert len(calls) == 1 and container.tasks.list()[1] == 0
     finally:
         container.database.engine.dispose()
+
+
+def test_smart_split_costs_the_previewed_children_and_returns_largest_with_its_limit(tmp_path, monkeypatch):
+    container = AppContainer(AppSettings(database_path=tmp_path/'db', config_dir=tmp_path/'config'))
+    values = {'year': ['2024'], 'month': ['01'], 'day': [f'{day:02}' for day in range(1, 11)]}
+    schema = finish_schema({'collection_id': 'test', 'fields': [
+        DatastoresProvider._field(name, {'type': 'StringListArrayWidget', 'required': True, 'details': {'values': options}})
+        for name, options in values.items()
+    ]})
+    assert 'smart' in schema['capabilities']['split_strategies']
+    container.datasets._cache[('test', None)] = (0, schema)
+    monkeypatch.setattr(container.accounts, 'next_available', lambda: ACCOUNT)
+    calls = []
+    failing = False
+    monkeypatch.setattr(DatastoresProvider, '__init__', lambda self, **kwargs: None)
+
+    def estimate(self, dataset_id, selection):
+        calls.append(selection)
+        start = selection['day'][0]
+        if failing and start == '08':
+            raise RuntimeError(ACCOUNT['key'])
+        cost, limit = {'01': (40, 100), '05': (30, 20), '08': (30, 60)}[start]
+        return {'cost': cost, 'limit': limit}
+
+    monkeypatch.setattr(DatastoresProvider, 'estimate_costs', estimate)
+    body = {'request_payload': values, 'editor_values': values, 'schema_revision': schema['revision'],
+            'split_strategy': 'smart', 'split_count': 3}
+    try:
+        with TestClient(create_app(container, with_worker=False)) as client:
+            preview = client.post('/api/v1/requests/preview', json={**body, 'dataset_id': 'test'})
+            assert preview.status_code == 200
+            planned = [item['request_payload'] for item in preview.json()['items']]
+            costing = client.post('/api/v1/datasets/test/costing', json=body).json()
+            assert costing == {'source': 'online', 'error': None, 'id': None, 'cost': 40, 'limit': 100,
+                               'request_count': 3, 'estimated_count': 3, 'over_limit_count': 1, 'max_index': 1}
+            assert sorted(calls, key=lambda item: item['day'][0]) == planned
+            assert container.tasks.list()[1] == 0
+            failing = True
+            incomplete = client.post('/api/v1/datasets/test/costing', json=body).json()
+            assert incomplete['source'] == 'error' and incomplete['estimated_count'] == 2
+            assert 'cost' not in incomplete and 'limit' not in incomplete and ACCOUNT['key'] not in str(incomplete)
+            invalid = client.post('/api/v1/tasks', json={**body, 'dataset_id': 'test', 'split_count': 11})
+            assert invalid.status_code == 422 and container.tasks.list()[1] == 0
+            created = client.post('/api/v1/tasks', json={**body, 'dataset_id': 'test'})
+            assert created.status_code == 200
+            assert [item['request_payload'] for item in created.json()['items']] == planned
+    finally:
+        container.database.engine.dispose()

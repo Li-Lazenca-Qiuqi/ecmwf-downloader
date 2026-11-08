@@ -151,6 +151,7 @@ def request_preview(
     request_file: Optional[Path] = typer.Option(None, "--request-file"),
     set_values: list[str] = typer.Option([], "--set"),
     split: SplitStrategy = typer.Option(SplitStrategy.NONE, "--split"),
+    split_count: Optional[int] = typer.Option(None, "--split-count", min=2),
     prefix: str = typer.Option('e5.oper.an.sfc/202401/', '--prefix'),
     schema_check: bool = typer.Option(False, "--schema-check", help="读取字段并以通用编译器校验"),
 ):
@@ -161,7 +162,8 @@ def request_preview(
         if schema["source"] == "error": raise typer.BadParameter(schema["error"])
         revision = schema["revision"]
     warnings: list[str] = []
-    items = container.tasks.preview(dataset_id=dataset_id, request_payload=_load_payload(request_file, set_values), split_strategy=split, warnings=warnings, schema_revision=revision)
+    items = container.tasks.preview(dataset_id=dataset_id, request_payload=_load_payload(request_file, set_values),
+                                    split_strategy=split, split_count=split_count, warnings=warnings, schema_revision=revision)
     for warning in warnings:
         typer.echo(warning, err=True)
     _json(items)
@@ -203,6 +205,7 @@ def task_create(
     request_file: Optional[Path] = typer.Option(None, "--request-file"),
     set_values: list[str] = typer.Option([], "--set"),
     split: SplitStrategy = typer.Option(SplitStrategy.NONE, "--split"),
+    split_count: Optional[int] = typer.Option(None, "--split-count", min=2),
     as_json: bool = typer.Option(False, "--json"),
     prefix: str = typer.Option('e5.oper.an.sfc/202401/', '--prefix'),
     schema_check: bool = typer.Option(False, "--schema-check", help="读取字段并以通用编译器校验"),
@@ -218,6 +221,7 @@ def task_create(
         schema_revision=revision,
         request_payload=_load_payload(request_file, set_values),
         split_strategy=split,
+        split_count=split_count,
     )
     values = [task.model_dump(mode="json") for task in tasks]
     _json(values) if as_json else _rows(values, ["id", "dataset_id", "status", "title"])

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+from concurrent.futures import ThreadPoolExecutor
 import math
 from datetime import datetime, timezone
 import threading
@@ -121,3 +122,22 @@ class DatasetService:
             return {'source': 'online', 'error': None, 'id': result.get('id'), 'cost': cost, 'limit': limit}
         except Exception:
             return {'source': 'error', 'error': '请求规模估算暂不可用，请检查账号、参数与网络后手动重试。'}
+
+    def costing_plan(self, dataset_id: str, selections: list[dict[str, Any]], account: Optional[dict[str, Any]]) -> dict[str, Any]:
+        if not account or not account.get('key'):
+            return {**self.costing(dataset_id, selections[0], account), 'request_count': len(selections), 'estimated_count': 0}
+
+        with ThreadPoolExecutor(max_workers=min(4, len(selections))) as executor:
+            results = list(executor.map(lambda selection: self.costing(dataset_id, selection, account), selections))
+
+        estimated = [(index, result) for index, result in enumerate(results, 1) if result['source'] == 'online']
+        summary = {
+            'request_count': len(selections),
+            'estimated_count': len(estimated),
+            'over_limit_count': sum(result['limit'] is not None and result['cost'] > result['limit'] for _, result in estimated),
+        }
+        if len(estimated) != len(results):
+            return {**summary, 'source': 'error',
+                    'error': f'已估算 {len(estimated)}/{len(results)} 个子请求，无法确定最大规模。请手动重试。'}
+        index, largest = max(estimated, key=lambda item: item[1]['cost'])
+        return {**largest, **summary, 'max_index': index}

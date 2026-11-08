@@ -9,6 +9,7 @@ import re
 from dataclasses import dataclass
 from typing import Any
 
+from ecmwf_downloader.application.smart_split import smart_split
 from ecmwf_downloader.domain.models import SplitStrategy
 from ecmwf_downloader.infrastructure.mirrors import FILE_MIRROR_IDS, ncar_key
 
@@ -36,12 +37,15 @@ class RequestBuilder:
         dataset_id: str,
         payload: dict[str, Any],
         strategy: SplitStrategy = SplitStrategy.NONE,
+        split_count: int | None = None,
         warnings: list[str] | None = None,
     ) -> list[PlannedTask]:
         if not dataset_id.strip():
             raise ValueError("dataset_id 不能为空")
         if not isinstance(payload, dict):
             raise ValueError("request_payload 必须是 JSON 对象")
+        if strategy != SplitStrategy.SMART and split_count is not None:
+            raise ValueError('仅按份数智能拆分可指定目标份数')
 
         if dataset_id in FILE_MIRROR_IDS:
             if strategy != SplitStrategy.NONE: raise ValueError('NCAR 按已发布文件生成任务，不支持日期拆分')
@@ -52,6 +56,11 @@ class RequestBuilder:
             return [PlannedTask({'object_key': key}, key.rsplit('/', 1)[-1]) for key in keys]
         if dataset_id == 'mirror-arco-era5':
             raise ValueError('ARCO 本地导出已移除，请选择 CDS 或 NCAR 文件来源')
+        if strategy == SplitStrategy.SMART:
+            if type(split_count) is not int or split_count < 2:
+                raise ValueError('智能拆分的目标份数必须是大于等于 2 的整数')
+            return [PlannedTask(item, f'{dataset_id} · 第 {index}/{split_count} 份')
+                    for index, item in enumerate(smart_split(payload, split_count, warnings), 1)]
         year_key = "year" if "year" in payload else "years" if "years" in payload else None
         month_key = "month" if "month" in payload else "months" if "months" in payload else None
         day_key = "day" if "day" in payload else "days" if "days" in payload else None

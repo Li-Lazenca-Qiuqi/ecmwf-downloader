@@ -51,7 +51,10 @@ export type Field = {
 }
 export type Schema = { collection_id: string; title: string; fields: Field[]; source: 'online' | 'cache' | 'error'; stale?: boolean; error?: string | null; description?: string; source_url?: string; prefix?: string; revision?: string; support_status?: 'full' | 'partial' | 'unavailable'; diagnostics?: { code: string; field: string; message: string; blocking: boolean }[]; capabilities?: { split_strategies: string[]; file_selection: boolean; spatial_modes: string[] } }
 export type Constraints = { constraints: Record<string, unknown[]>; source: 'online' | 'error' | 'not_applicable'; error?: string | null }
-export type Costing = { source: 'online' | 'error' | 'not_applicable'; error?: string | null; id?: string; cost?: number; limit?: number | null }
+export type Costing = {
+  source: 'online' | 'error' | 'not_applicable'; error?: string | null; id?: string; cost?: number; limit?: number | null
+  request_count?: number; estimated_count?: number; max_index?: number; over_limit_count?: number
+}
 export type DatasetCatalogue = { items: { id: string; title: string }[]; total: number; catalogue_total: number; source: 'online' | 'cache' | 'error' | 'builtin'; stale: boolean; error: string | null; fetched_at: string | null }
 export type AIConfig = { enabled: boolean; base_url: string; model: string; json_mode: boolean; has_api_key: boolean; sdk_available: boolean; ready: boolean }
 export type AIConfigInput = Pick<AIConfig, 'enabled' | 'base_url' | 'model' | 'json_mode'> & { api_key?: string }
@@ -59,9 +62,11 @@ export type RequestBody = {
   dataset_id: string
   request_payload: Record<string, unknown>
   split_strategy: string
+  split_count?: number
   schema_revision?: string
   editor_values?: Record<string, unknown>
 }
+export type RequestPreviewItem = { label: string; request_payload: Record<string, unknown> }
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(path, {
     ...init,
@@ -81,14 +86,14 @@ export const api = {
   summary: () => request<Summary>('/api/v1/summary'),
   tasks: (params = '') => request<{ items: Task[]; total: number }>(`/api/v1/tasks${params}`),
   task: (id: string) => request<Task>(`/api/v1/tasks/${id}`),
-  preview: (body: RequestBody) => post<{ items: { label: string; request_payload: Record<string, unknown> }[]; warnings: string[] }>('/api/v1/requests/preview', body),
+  preview: (body: RequestBody) => post<{ items: RequestPreviewItem[]; warnings: string[] }>('/api/v1/requests/preview', body),
   createTasks: (body: RequestBody) => post<{ items: Task[] }>('/api/v1/tasks', body),
   action: (id: string, action: 'cancel' | 'retry' | 'refresh') => post<Task>(`/api/v1/tasks/${id}/${action}`),
   attach: (id: string, remote_request_id: string) => post<Task>('/api/v1/tasks/' + id + '/attach', { remote_request_id }),
   datasets: (refresh = false, source = 'cds') => request<DatasetCatalogue>(`/api/v1/datasets?${new URLSearchParams({ refresh: String(refresh), source })}`),
   schema: (id: string, refresh = false, prefix = 'e5.oper.an.sfc/202401/') => request<Schema>(`/api/v1/datasets/${encodeURIComponent(id)}/schema?${new URLSearchParams({ refresh: String(refresh), prefix })}`),
   constraints: (id: string, selection: Record<string, unknown>) => post<Constraints>(`/api/v1/datasets/${encodeURIComponent(id)}/constraints`, selection),
-  costing: (id: string, body: Pick<RequestBody, 'request_payload' | 'schema_revision' | 'editor_values'>) => post<Costing>(`/api/v1/datasets/${encodeURIComponent(id)}/costing`, body),
+  costing: (id: string, body: Omit<RequestBody, 'dataset_id'>) => post<Costing>(`/api/v1/datasets/${encodeURIComponent(id)}/costing`, body),
   accounts: () => request<{ items: Account[] }>('/api/v1/accounts'),
   addAccount: (body: Record<string, string>) => post<Account>('/api/v1/accounts', body),
   updateAccount: (id: string, body: Record<string, string>) => request<Account>(`/api/v1/accounts/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
