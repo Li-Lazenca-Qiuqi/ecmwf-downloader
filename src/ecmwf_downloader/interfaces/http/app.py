@@ -13,6 +13,8 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 
 from ecmwf_downloader.application.container import AppContainer
+from ecmwf_downloader.config import SettingsIOError, public_ai_settings, service_url
+from ecmwf_downloader.infrastructure.secrets import SecretStoreError
 from ecmwf_downloader.infrastructure.mirrors import DEFAULT_PREFIX, MIRROR_IDS
 from ecmwf_downloader.infrastructure.cds import ProviderError
 from ecmwf_downloader.application.worker import RequestScheduler
@@ -70,6 +72,11 @@ def create_app(container: Optional[AppContainer] = None, *, with_worker: bool = 
     async def _provider_error(_request: Request, exc: ProviderError):
         return _problem(503, str(exc), "数据源服务暂不可用")
 
+    @app.exception_handler(SettingsIOError)
+    @app.exception_handler(SecretStoreError)
+    async def _storage_error(_request: Request, exc: SettingsIOError | SecretStoreError):
+        return _problem(503, str(exc), "配置存储不可用")
+
     @app.exception_handler(ValueError)
     async def _value_error(_request: Request, exc: ValueError):
         return _problem(422, str(exc), "参数或状态无效")
@@ -79,11 +86,10 @@ def create_app(container: Optional[AppContainer] = None, *, with_worker: bool = 
         return _problem(404, str(exc).strip("'"), "资源不存在")
 
     @app.exception_handler(RequestValidationError)
-    async def _validation_error(_request: Request, exc: RequestValidationError):
+    async def _validation_error(_request: Request, _exc: RequestValidationError):
         if _request.url.path.startswith('/api/v1/ai/'):
             return _problem(422, 'AI 参数或配置无效，请检查字段类型、服务地址与模型', '请求校验失败')
-        issues = [{"loc": issue["loc"], "msg": issue["msg"], "type": issue["type"]} for issue in exc.errors()]
-        return _problem(422, json.dumps(issues, ensure_ascii=False), "请求校验失败")
+        return _problem(422, "请检查必填项、字段类型和取值范围。", "请求校验失败")
 
     @app.exception_handler(HTTPException)
     async def _http_error(_request: Request, exc: HTTPException):
@@ -225,6 +231,8 @@ def create_app(container: Optional[AppContainer] = None, *, with_worker: bool = 
         if not account:
             return _problem(404, f"账号不存在: {account_id}", "资源不存在")
         values = body.model_dump(exclude_none=True)
+        if 'url' in values:
+            values['url'] = service_url(values['url'])
         values = {**account, **values}
         app_container.secrets.upsert_account(values)
         return next(item for item in app_container.accounts.list() if item.id == account_id).model_dump(mode="json")
@@ -256,10 +264,7 @@ def create_app(container: Optional[AppContainer] = None, *, with_worker: bool = 
         key = body.api_key.get_secret_value().strip() if body.api_key else ''
         if body.enabled and not (key or app_container.secrets.ai_config().get('api_key')):
             return _problem(422, '启用 AI 前请填写 API Key', '配置不完整')
-        # 先校验完整请求；密钥单独保存，留空保留已有密钥。
-        if key:
-            app_container.secrets.update_ai({'api_key': key})
-        app_container.update_settings({'ai': body.model_dump(exclude={'api_key'})})
+        app_container.update_settings({'ai': body.model_dump(exclude={'api_key'})}, ai_key=key)
         return app_container.ai.configuration()
 
     @app.post("/api/v1/ai/suggestions")
@@ -290,15 +295,13 @@ def create_app(container: Optional[AppContainer] = None, *, with_worker: bool = 
 
     @app.get("/api/v1/settings")
     def get_settings():
-        values = app_container.settings.model_dump(mode="json")
-        return {"database_path": values["database_path"], "config_dir": values["config_dir"], "requests": values["requests"], "ai": {key: value for key, value in values["ai"].items() if key != "api_key"}}
+        settings = app_container.settings.model_dump(mode="json")
+        return {**settings, "ai": public_ai_settings(settings["ai"])}
 
     @app.patch("/api/v1/settings")
     def patch_settings(body: SettingsPatch):
-        values = app_container.update_settings(body.values)
-        dumped = values.model_dump(mode="json")
-        dumped["ai"] = {key: value for key, value in dumped["ai"].items() if key != "api_key"}
-        return dumped
+        settings = app_container.update_settings(body.values).model_dump(mode="json")
+        return {**settings, "ai": public_ai_settings(settings["ai"])}
 
     @app.get("/api/v1/events")
     async def events(request: Request, last_event_id: int = Query(0, alias="last_event_id"), header_event_id: Optional[str] = Header(None, alias="Last-Event-ID")):

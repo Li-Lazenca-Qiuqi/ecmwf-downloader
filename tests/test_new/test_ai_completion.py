@@ -1,4 +1,5 @@
 import json
+import logging
 from types import SimpleNamespace
 
 import httpx
@@ -125,7 +126,9 @@ def test_ai_partial_validation_rejects_invalid_fields_and_types(parameters):
 
 
 @pytest.mark.parametrize('status, content', [(401, {'error': {'message': 'private-test-value', 'type': 'invalid_api_key'}}), (429, {'error': {'message': 'private-test-value'}})])
-def test_provider_errors_are_safe_and_not_retried(container, monkeypatch, status, content):
+def test_provider_errors_are_safe_and_not_retried(container, monkeypatch, status, content, caplog):
+    caplog.set_level(logging.DEBUG)
+    caplog.set_level(logging.DEBUG, logger='openai')
     container.settings.ai = {'enabled': True, 'base_url': 'https://example.invalid/v1'}
     container.secrets.update_ai({'api_key': 'private-test-value'})
     calls = []
@@ -136,7 +139,7 @@ def test_provider_errors_are_safe_and_not_retried(container, monkeypatch, status
     with TestClient(create_app(container, with_worker=False)) as client:
         response = client.post('/api/v1/ai/suggestions', json={'field_schema': field_schema(), 'user_request': '测试'})
         assert response.status_code == 503
-        assert 'private-test-value' not in response.text
+        assert 'private-test-value' not in response.text + caplog.text
         assert len(calls) == 1
 
 

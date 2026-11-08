@@ -4,12 +4,17 @@ from __future__ import annotations
 
 import copy
 import os
-import tempfile
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Iterator, Optional
 
 import yaml
+
+from ecmwf_downloader.infrastructure.yaml_file import atomic_write_yaml
+
+
+class SecretStoreError(RuntimeError):
+    pass
 
 
 class SecretStore:
@@ -55,33 +60,30 @@ class SecretStore:
                 data = yaml.safe_load(handle) or {}
         except FileNotFoundError:
             data = {"version": 1, "accounts": [], "ai": {}}
+        except (OSError, UnicodeError, yaml.YAMLError):
+            raise SecretStoreError("无法读取凭据文件，请检查格式和权限。") from None
         if not isinstance(data, dict):
-            raise ValueError("secrets.yaml 必须是对象")
+            raise SecretStoreError("凭据文件必须是 YAML 对象。")
         data.setdefault("version", 1)
         data.setdefault("accounts", [])
         data.setdefault("ai", {})
         return data
 
     def _atomic_write(self, data: dict[str, Any]) -> None:
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        fd, temp_name = tempfile.mkstemp(prefix=f".{self.path.name}.", dir=self.path.parent)
         try:
-            with os.fdopen(fd, "w", encoding="utf-8") as handle:
-                yaml.safe_dump(data, handle, allow_unicode=True, sort_keys=False)
-                handle.flush()
-                os.fsync(handle.fileno())
-            os.chmod(temp_name, 0o600)
-            os.replace(temp_name, self.path)
-            self._ensure_permissions()
-        finally:
-            if os.path.exists(temp_name):
-                os.unlink(temp_name)
+            atomic_write_yaml(self.path, data)
+        except (OSError, yaml.YAMLError):
+            raise SecretStoreError("无法保存凭据文件，请检查权限与磁盘空间。") from None
+        self._ensure_permissions()
 
     def _update(self, callback) -> None:
-        with self._lock(exclusive=True):
-            data = self._read_unlocked()
-            callback(data)
-            self._atomic_write(data)
+        try:
+            with self._lock(exclusive=True):
+                data = self._read_unlocked()
+                callback(data)
+                self._atomic_write(data)
+        except OSError:
+            raise SecretStoreError("无法保存凭据文件，请检查权限与磁盘空间。") from None
 
     def snapshot(self) -> dict[str, Any]:
         with self._lock():

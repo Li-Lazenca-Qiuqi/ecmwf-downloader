@@ -9,7 +9,7 @@ export default function SettingsPage() {
   const [configure, setConfigure] = useState(false)
   const settings = useQuery({ queryKey: ['settings'], queryFn: api.settings })
   const ai = useQuery({ queryKey: ['ai-config'], queryFn: api.aiConfig, staleTime: 30000, retry: false })
-  return <section className="page settings-page"><div className="page-heading"><div><h1>设置</h1><p>配置 AI 服务并查看后台设置。请求调度参数可通过 CLI 修改，运行中的调度器会采用新参数；已开始的后台操作会正常结束。</p></div></div>
+  return <section className="page settings-page"><div className="page-heading"><div><h1>设置</h1><p>配置 AI 服务并查看后台设置。通过 CLI 保存的调度参数在服务重启后生效。通过本服务 API 更新时，后续调度使用新值，已开始的操作和已安排的重试照常进行。</p></div></div>
     <section className="panel settings-ai" id="ai" aria-labelledby="settings-ai-title">
       <div className="settings-ai-heading"><div><h2 id="settings-ai-title">AI 服务</h2><p className="helper">配置后，在添加任务页面使用参数补全。</p></div><button type="button" className="button" disabled={ai.isPending} onClick={() => setConfigure(true)}><Settings2 size={15} />配置服务</button></div>
       <ErrorNotice error={ai.error} />{ai.isPending ? <Loading /> : ai.data && <dl className="settings-ai-details">

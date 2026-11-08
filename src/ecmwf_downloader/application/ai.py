@@ -9,12 +9,13 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import logging
 import math
 import re
 from typing import Any
 
 from ecmwf_downloader.application.request_compiler import validate_value
-from ecmwf_downloader.config import AppSettings
+from ecmwf_downloader.config import AppSettings, public_service_url
 from ecmwf_downloader.infrastructure.secrets import SecretStore
 
 
@@ -43,7 +44,8 @@ class AIService:
     def configuration(self) -> dict[str, Any]:
         config = self._config()
         sdk_available = importlib.util.find_spec('openai') is not None
-        return {**{name: config[name] for name in ['enabled', 'base_url', 'model', 'json_mode']},
+        return {**{name: config[name] for name in ['enabled', 'model', 'json_mode']},
+                'base_url': public_service_url(str(config['base_url'])),
                 'has_api_key': bool(config.get('api_key')), 'sdk_available': sdk_available,
                 'ready': bool(config.get('enabled') and config.get('api_key') and sdk_available)}
 
@@ -86,10 +88,15 @@ class AIService:
                 ),
             },
         ]
+        base_url = public_service_url(str(config['base_url']))
+        if not base_url:
+            raise RuntimeError('AI 服务地址无效，请在设置中填写无凭据的 HTTP 或 HTTPS URL')
+        # SDK 的调试日志包含原始响应及异常，保留应用自己的安全错误提示。
+        logging.getLogger('openai').setLevel(logging.WARNING)
         try:
             with OpenAI(
                 api_key=str(config["api_key"]),
-                base_url=str(config.get("base_url") or "https://api.openai.com/v1"),
+                base_url=base_url,
                 timeout=float(config.get("timeout", 120)),
                 max_retries=0,
             ) as client:

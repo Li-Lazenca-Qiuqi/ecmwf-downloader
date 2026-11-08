@@ -76,7 +76,7 @@ class DatasetService:
             return result
         except Exception as error:
             message = '无法获取在线字段，请检查数据集 ID、可用账号与网络后重试。'
-            if isinstance(error, requests.HTTPError) and error.response.status_code == 404:
+            if isinstance(error, requests.HTTPError) and error.response is not None and error.response.status_code == 404:
                 message = '该数据集的元数据或表单暂不可用（HTTP 404），请重试或查看官方页面。'
             if dataset_id in MIRROR_IDS:
                 message = '无法获取镜像字段，请检查后端网络与 NCAR 目录。'

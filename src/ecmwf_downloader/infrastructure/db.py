@@ -120,6 +120,7 @@ class Database:
             f"sqlite:///{self.path}",
             connect_args={"check_same_thread": False, "timeout": 30},
             future=True,
+            hide_parameters=True,
         )
         self._configure_sqlite()
 

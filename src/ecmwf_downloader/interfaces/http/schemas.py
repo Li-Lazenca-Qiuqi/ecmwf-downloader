@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator
-from urllib.parse import urlsplit
+from ecmwf_downloader.config import service_url
 
 from ecmwf_downloader.domain.models import AccountData, SplitStrategy, TaskData, TaskStatus
 
@@ -74,14 +74,8 @@ class AIConfigBody(BaseModel):
 
     @field_validator('base_url')
     @classmethod
-    def service_url(cls, value: str) -> str:
-        value = value.strip().rstrip('/')
-        url = urlsplit(value)
-        # 访问 port 属性同时校验端口格式与范围。
-        _ = url.port
-        if url.scheme not in {'http', 'https'} or not url.hostname or url.username or url.password or url.query or url.fragment:
-            raise ValueError('服务地址需要是无凭据的 HTTP 或 HTTPS URL')
-        return value
+    def validate_base_url(cls, value: str) -> str:
+        return service_url(value)
 
     @field_validator('model')
     @classmethod

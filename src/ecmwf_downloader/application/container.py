@@ -5,12 +5,20 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-import yaml
+from pydantic import ValidationError
 
 from ecmwf_downloader.application.ai import AIService
 from ecmwf_downloader.application.datasets import DatasetService
 from ecmwf_downloader.application.services import AccountService, TaskService, TemplateService
-from ecmwf_downloader.config import AppSettings, load_settings
+from ecmwf_downloader.config import (
+    AppSettings,
+    PublicAISettings,
+    SettingsError,
+    SettingsIOError,
+    load_settings,
+    parse_app_config,
+    validate_app_config,
+)
 from ecmwf_downloader.infrastructure.db import Database
 from ecmwf_downloader.infrastructure.repositories import (
     AccountStateRepository,
@@ -18,12 +26,17 @@ from ecmwf_downloader.infrastructure.repositories import (
     TaskRepository,
     TemplateRepository,
 )
-from ecmwf_downloader.infrastructure.secrets import SecretStore
+from ecmwf_downloader.infrastructure.secrets import SecretStore, SecretStoreError
+from ecmwf_downloader.infrastructure.yaml_file import atomic_write_bytes, atomic_write_yaml, file_write_lock
 
 
 class AppContainer:
-    def __init__(self, settings: AppSettings | None = None):
-        self.settings = (settings or load_settings()).resolve_relative_paths(Path.cwd())
+    def __init__(self, settings: AppSettings | None = None, *, config_path: Path | None = None):
+        if settings is None:
+            config_path = config_path or Path("config/app.yaml")
+            settings = load_settings(config_dir=config_path.parent, config_path=config_path)
+        self.settings = settings.resolve_relative_paths()
+        self.config_path = (config_path or self.settings.config_dir / "app.yaml").resolve()
         self.settings.config_dir.mkdir(parents=True, exist_ok=True)
         self.database = Database(self.settings.database_path)
         self.database.create_schema()
@@ -43,27 +56,54 @@ class AppContainer:
         self.tasks.datasets_account = self.secrets.get_account
         self.ai = AIService(self.settings, self.secrets)
 
-    def update_settings(self, values: dict[str, Any]) -> AppSettings:
-        """Persist allow-listed non-secret settings and reload them."""
-        allowed = {"requests", "ai"}
-        if set(values) - allowed:
-            raise ValueError("只能修改 requests 或 ai 非敏感设置")
-        path = self.settings.config_dir / "app.yaml"
-        data = yaml.safe_load(path.read_text(encoding="utf-8")) if path.exists() else {}
-        data = data if isinstance(data, dict) else {}
-        for section, section_values in values.items():
-            if not isinstance(section_values, dict):
-                raise ValueError(f"设置分组必须是对象: {section}")
-            if section == "ai" and {"api_key", "key", "token", "secret"} & set(section_values):
-                raise ValueError("AI 凭据必须写入 config/secrets.yaml，不得写入 app.yaml")
-            data[section] = {**(data.get(section) or {}), **section_values}
-        AppSettings.model_validate(data)
-        path.write_text(yaml.safe_dump(data, allow_unicode=True, sort_keys=False), encoding="utf-8")
-        reloaded = load_settings(config_dir=self.settings.config_dir, config_path=path)
-        reloaded.config_dir = self.settings.config_dir
-        reloaded.database_path = self.settings.database_path
-        self.settings = reloaded
-        self.tasks.settings = self.settings
-        self.ai.settings = self.settings
-        self.tasks_repository.retry_delays = tuple(self.settings.requests.retry_delays) or (5.0,)
-        return self.settings
+    def update_settings(self, values: dict[str, Any], *, ai_key: str = "") -> AppSettings:
+        """先验证完整配置，保存成功后才更新进程内设置。"""
+        if set(values) - {"requests", "ai"}:
+            raise SettingsError("只能修改 requests 或 ai 非敏感设置")
+        if any(not isinstance(section, dict) for section in values.values()):
+            raise SettingsError("设置分组必须是对象")
+        if "ai" in values:
+            if {"api_key", "key", "token", "secret"} & values["ai"].keys():
+                raise SettingsError("AI 凭据必须写入 config/secrets.yaml，不得写入 app.yaml")
+            try:
+                ai = PublicAISettings.model_validate(values["ai"]).model_dump(exclude_unset=True)
+            except ValidationError:
+                raise SettingsError("AI 设置无效，请检查字段、类型、范围和服务地址。") from None
+            values = {**values, "ai": ai}
+
+        path = self.config_path
+        try:
+            with file_write_lock(path):
+                previous = path.read_bytes() if path.exists() else None
+                runtime = self.settings.model_dump(mode="json")
+                data = parse_app_config(previous) if previous is not None else runtime.copy()
+                for section, section_values in values.items():
+                    current = data.get(section, {})
+                    if not isinstance(current, dict):
+                        raise SettingsError("应用配置分组必须是对象。")
+                    data[section] = {**current, **section_values}
+                    # 独立进程写入的其他值在重启时读取，本进程只应用本次更新。
+                    runtime[section] = {**runtime[section], **section_values}
+                validate_app_config(data)
+                updated = validate_app_config(runtime)
+                atomic_write_yaml(path, data)
+                if ai_key:
+                    try:
+                        self.secrets.update_ai({"api_key": ai_key})
+                    except SecretStoreError:
+                        # 两个文件分开存储，凭据保存失败时恢复原应用配置。
+                        try:
+                            if previous is None:
+                                path.unlink()
+                            else:
+                                atomic_write_bytes(path, previous)
+                        except OSError:
+                            raise SettingsIOError("凭据保存失败，应用配置也未能恢复，请检查存储。") from None
+                        raise
+                self.tasks_repository.retry_delays = tuple(updated.requests.retry_delays)
+                self.tasks.settings = updated
+                self.ai.settings = updated
+                self.settings = updated
+        except OSError:
+            raise SettingsIOError("无法保存应用配置，请检查权限与磁盘空间。") from None
+        return updated

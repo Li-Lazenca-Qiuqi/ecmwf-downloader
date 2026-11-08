@@ -6,6 +6,8 @@ from urllib.parse import unquote, urlsplit
 from ecmwf.datastores import Client as DatastoresClient
 import requests
 
+from ecmwf_downloader.config import service_url
+
 class ProviderError(RuntimeError):
     pass
 
@@ -23,7 +25,7 @@ class CDSProvider:
 
     def _client(self):
         return DatastoresClient(
-            url=self.account.get("url", "https://cds.climate.copernicus.eu/api").rstrip("/"),
+            url=service_url(self.account.get("url", "https://cds.climate.copernicus.eu/api")),
             key=self.account["key"], timeout=(10, 20), maximum_tries=1,
             cleanup=False, progress=False, sleep_max=1, retry_after=1,
             log_callback=lambda *args: None,
@@ -92,14 +94,7 @@ class CDSProvider:
 
     def check_connection(self) -> tuple[bool, str]:
         try:
-            client = DatastoresClient(
-                url=self.account.get("url", "https://cds.climate.copernicus.eu/api").rstrip("/"),
-                key=self.account["key"],
-                timeout=(10, 20),
-                maximum_tries=1,
-                progress=False,
-                log_callback=lambda *args: None,
-            )
+            client = self._client()
             client.check_authentication()
             return True, "账号认证通过；数据集条款和请求权限需在提交时验证。"
         except requests.HTTPError as exc:

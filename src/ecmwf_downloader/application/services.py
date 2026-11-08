@@ -11,7 +11,7 @@ from uuid import uuid4
 
 from ecmwf_downloader.application.request_builder import PlannedTask, RequestBuilder
 from ecmwf_downloader.application.request_compiler import compile_request
-from ecmwf_downloader.config import AppSettings
+from ecmwf_downloader.config import AppSettings, public_service_url, service_url
 from ecmwf_downloader.domain.models import AccountData, AccountStatus, SplitStrategy, TaskData, TaskStatus
 from ecmwf_downloader.infrastructure.cds import CDSProvider
 from ecmwf_downloader.infrastructure.repositories import (
@@ -165,21 +165,21 @@ class AccountService:
                 AccountData(
                     id=account_id,
                     email=str(account.get("email", "")),
-                    url=str(account.get("url", "https://cds.climate.copernicus.eu/api")),
+                    url=public_service_url(str(account.get("url", "https://cds.climate.copernicus.eu/api"))),
                     status=status,
                     is_busy=account_id in busy_accounts,
                     used_count=row.used_count if row else 0,
                     today_used_count=today_usage.get(account_id, 0),
                     fail_count=row.fail_count if row else 0,
                     last_used=row.last_used if row else None,
-                    last_error=row.last_error if row else None,
+                    last_error="上次 CDS 操作失败，请检查账号权限与网络。" if row and row.last_error else None,
                 )
             )
         return result
 
     def add(self, *, email: str, key: str, url: str, account_id: Optional[str] = None) -> AccountData:
         account_id = account_id or str(uuid4())
-        self.secrets.upsert_account({"id": account_id, "email": email, "key": key, "url": url})
+        self.secrets.upsert_account({"id": account_id, "email": email, "key": key, "url": service_url(url)})
         self.states.set_status(account_id, "active")
         return next(item for item in self.list() if item.id == account_id)
 

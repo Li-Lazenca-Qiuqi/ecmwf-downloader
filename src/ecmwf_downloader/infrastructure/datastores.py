@@ -5,6 +5,7 @@ from __future__ import annotations
 import html
 import re
 from typing import Any
+from ecmwf_downloader.config import service_url
 from ecmwf_downloader.domain.schema import finish_schema
 
 
@@ -15,7 +16,7 @@ def plain_text(value: Any) -> str:
 class DatastoresProvider:
     def __init__(self, *, url: str, key: str):
         from ecmwf.datastores import Client
-        self.client = Client(url=url.rstrip('/'), key=key, timeout=(10, 25), maximum_tries=1,
+        self.client = Client(url=service_url(url), key=key, timeout=(10, 25), maximum_tries=1,
                              progress=False, log_callback=lambda *args: None)
 
     def schema(self, dataset_id: str) -> dict[str, Any]:

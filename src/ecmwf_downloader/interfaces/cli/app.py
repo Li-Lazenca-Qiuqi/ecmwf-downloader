@@ -14,11 +14,12 @@ import yaml
 from ecmwf_downloader import __version__
 from ecmwf_downloader.application.container import AppContainer
 from ecmwf_downloader.application.worker import RequestScheduler
-from ecmwf_downloader.config import load_settings
+from ecmwf_downloader.config import SettingsError, SettingsIOError, load_settings, public_ai_settings, service_url
+from ecmwf_downloader.infrastructure.secrets import SecretStoreError
 from ecmwf_downloader.domain.models import AccountStatus, SplitStrategy, TaskStatus
 from ecmwf_downloader.interfaces.http.app import create_app
 
-app = typer.Typer(help="ECMWF Downloader CLI", invoke_without_command=True)
+app = typer.Typer(help="ECMWF Downloader CLI", invoke_without_command=True, pretty_exceptions_show_locals=False)
 task_app = typer.Typer(help="请求队列管理", no_args_is_help=True)
 dataset_app = typer.Typer(help="数据集与 Schema", no_args_is_help=True)
 request_app = typer.Typer(help="请求预览与 AI 建议", no_args_is_help=True)
@@ -64,10 +65,14 @@ def main(
     if version:
         typer.echo(__version__)
         raise typer.Exit()
-    settings = load_settings(config_dir)
-    if database:
-        settings.database_path = database
-    ctx.obj = AppContainer(settings)
+    try:
+        settings = load_settings(config_dir)
+        if database:
+            settings.database_path = database
+        ctx.obj = AppContainer(settings, config_path=(config_dir / "app.yaml").resolve())
+    except (SettingsError, SettingsIOError, SecretStoreError) as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=2) from None
     if ctx.invoked_subcommand is None:
         typer.echo(ctx.get_help())
 
@@ -348,7 +353,11 @@ def account_add(
     key: str = typer.Option(..., prompt=True, hide_input=True),
     url: str = typer.Option("https://cds.climate.copernicus.eu/api"),
 ):
-    item = _ctx_container(ctx).accounts.add(email=email, key=key, url=url)
+    try:
+        item = _ctx_container(ctx).accounts.add(email=email, key=key, url=url)
+    except ValueError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=2) from None
     typer.echo(item.id)
 
 
@@ -364,6 +373,12 @@ def account_edit(
     account = container.secrets.get_account(account_id)
     if not account:
         raise typer.Exit(code=4)
+    if url is not None:
+        try:
+            url = service_url(url)
+        except ValueError as exc:
+            typer.echo(str(exc), err=True)
+            raise typer.Exit(code=2) from None
     values = {**account, **{key: value for key, value in {"email": email, "key": key, "url": url}.items() if value is not None}}
     container.secrets.upsert_account(values)
     typer.echo("已保存")
@@ -426,7 +441,7 @@ def template_delete(ctx: typer.Context, template_id: str):
 @config_app.command("show")
 def config_show(ctx: typer.Context, as_json: bool = typer.Option(False, "--json")):
     values = _ctx_container(ctx).settings.model_dump(mode="json")
-    _json(values)
+    _json({**values, "ai": public_ai_settings(values["ai"])})
 
 
 @config_app.command("set")
@@ -446,8 +461,15 @@ def config_set(ctx: typer.Context, key: str, value: str):
     if key not in allowed:
         raise typer.BadParameter(f"仅支持: {', '.join(sorted(allowed))}")
     section, field = key.split(".", 1)
-    container.update_settings({section: {field: yaml.safe_load(value)}})
-    typer.echo("已更新")
+    try:
+        container.update_settings({section: {field: yaml.safe_load(value)}})
+    except yaml.YAMLError:
+        typer.echo("配置值不是有效的 YAML。", err=True)
+        raise typer.Exit(code=2) from None
+    except (SettingsError, SettingsIOError) as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=2) from None
+    typer.echo("配置已保存，正在运行的服务将在重启后读取。")
 
 
 @config_app.command("set-ai-key")
