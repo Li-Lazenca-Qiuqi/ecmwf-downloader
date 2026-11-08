@@ -118,7 +118,11 @@ export default function QueuePage() {
         <CardSelect label="请求状态" value={status} options={statusOptions}
           onChange={value => { setStatus(value); changePage(0) }} />
         {selectedItems.length > 0 && <span className="selection-count">已选 {selectedItems.length} 项</span>}
-        <button type="button" className="button" disabled={!readyItems.length || refreshLinks.isPending} title={selectedItems.length ? '向源站重新查询已选请求的结果链接' : '向源站重新查询本页就绪请求的结果链接'} onClick={() => refreshLinks.mutate(readyItems.map(task => task.id))}><RefreshCw size={15} className={refreshLinks.isPending ? 'spin' : undefined} />更新链接</button>
+        <button type="button" className="button" disabled={!readyItems.length || refreshLinks.isPending}
+          title={selectedItems.length ? '重新查询已选就绪请求的状态与结果链接' : '重新查询本页就绪请求的状态与结果链接'}
+          onClick={() => refreshLinks.mutate(readyItems.map(task => task.id))}>
+          <RefreshCw size={15} className={refreshLinks.isPending ? 'spin' : undefined} />刷新状态
+        </button>
         <button type="button" className="button" disabled={!readyUrls.length} title={selectedItems.length ? '将已选请求的就绪链接复制到剪贴板' : '将本页就绪请求的链接复制到剪贴板'} onClick={() => void links.copy(readyUrls)}><Copy size={15} />复制链接</button>
       </div>
       <ErrorNotice error={tasks.error || action.error || refreshLinks.error} />

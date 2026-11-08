@@ -3,7 +3,7 @@ import { type TaskStatus } from './lib/api'
 
 export const statusLabels: Record<TaskStatus, string> = {
   queued: '本地排队', submitting: '提交中', accepted: '远端排队', running: '远端处理中',
-  refreshing: '更新链接', completed: '链接已就绪', failed: '失败', cancelling: '取消中',
+  refreshing: '刷新中', completed: '链接已就绪', failed: '失败', cancelling: '取消中',
   cancelled: '已取消', expired: '结果失效', submission_unknown: '待核实提交',
 }
 export function StatusBadge({ status }: { status: TaskStatus }) {
