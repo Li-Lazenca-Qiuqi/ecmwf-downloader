@@ -5,24 +5,33 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Literal, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator
+from urllib.parse import urlsplit
 
 from ecmwf_downloader.domain.models import AccountData, SplitStrategy, TaskData, TaskStatus
 
 
+class CostingBody(BaseModel):
+    request_payload: dict[str, Any]
+    schema_revision: Optional[str] = None
+    editor_values: Optional[dict[str, Any]] = None
+
+
 class PreviewBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     dataset_id: str
     request_payload: dict[str, Any]
-    output_dir: Optional[Path] = None
     split_strategy: SplitStrategy = SplitStrategy.NONE
-    filename: Optional[str] = None
+    schema_revision: Optional[str] = None
+    editor_values: Optional[dict[str, Any]] = None
 
 
 class TaskCreateBody(PreviewBody):
     max_retries: Optional[int] = Field(default=None, ge=0, le=20)
-    overwrite: Optional[bool] = None
-    enqueue: Literal[True] = Field(default=True, deprecated=True)
 
+class AttachBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    remote_request_id: str = Field(min_length=1, max_length=255, pattern=r"^[A-Za-z0-9_-]+$")
 
 class TaskListQuery(BaseModel):
     status: Optional[TaskStatus] = None
@@ -54,7 +63,34 @@ class AccountResponse(AccountData):
 
 class AISuggestionBody(BaseModel):
     field_schema: dict[str, Any]
-    user_request: str
+    user_request: str = Field(min_length=1, max_length=12000)
+
+
+class AIConfigBody(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    enabled: bool
+    base_url: str = Field(min_length=1, max_length=2048)
+    model: str = Field(min_length=1, max_length=200)
+    api_key: Optional[SecretStr] = None
+    json_mode: bool = True
+
+    @field_validator('base_url')
+    @classmethod
+    def service_url(cls, value: str) -> str:
+        value = value.strip().rstrip('/')
+        url = urlsplit(value)
+        # 访问 port 属性同时校验端口格式与范围。
+        _ = url.port
+        if url.scheme not in {'http', 'https'} or not url.hostname or url.username or url.password or url.query or url.fragment:
+            raise ValueError('服务地址需要是无凭据的 HTTP 或 HTTPS URL')
+        return value
+
+    @field_validator('model')
+    @classmethod
+    def model_name(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError('模型名称不能为空')
+        return value.strip()
 
 
 class TemplateBody(BaseModel):

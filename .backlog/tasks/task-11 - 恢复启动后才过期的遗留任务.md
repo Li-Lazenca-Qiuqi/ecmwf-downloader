@@ -1,10 +1,10 @@
 ---
 id: TASK-11
 title: 恢复启动后才过期的遗留任务
-status: To Do
+status: 待验收
 assignee: []
 created_date: '2026-10-23T15:01:00Z'
-updated_date: '2026-10-25T08:19:00Z'
+updated_date: '2026-10-27T16:32:00Z'
 labels:
   - migration
 milestone: m-1
@@ -29,7 +29,13 @@ ordinal: 11000
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 启动时尚未过期、稍后过期的遗留任务能恢复调度
-- [ ] #2 有有效拥有者的任务不被错误恢复
-- [ ] #3 定向回归覆盖恢复窗口并更新限制说明
+- [ ] #1 启动时未过期、运行中才过期的请求租约能恢复，有已知远端 ID 时继续查询
+- [ ] #2 有效拥有者的租约不错误恢复，未知提交转待核实而不盲目自动重发
+- [ ] #3 定向回归覆盖迟到过期、有效租约、已知 ID 和未知提交，记录恢复边界
 <!-- AC:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+2026-10-28 新请求队列每轮扫描过期租约，不只启动时扫描；旧 worker_id 清除后，已知 ID 保持原账号与作业，未知提交进入 submission_unknown。有效租约、迟到过期、已知/未知 ID 定向检查通过；不扫描或清除旧科学数据文件。
+<!-- SECTION:NOTES:END -->

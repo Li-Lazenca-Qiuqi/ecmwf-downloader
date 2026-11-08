@@ -4,19 +4,18 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Annotated, Any, Dict, Optional
 
 import yaml
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, FiniteFloat, field_validator
 
 
-class DownloadSettings(BaseModel):
-    output_dir: Path = Path("data/downloads")
-    max_workers: int = Field(default=4, ge=1, le=32)
-    max_retries: int = Field(default=3, ge=0, le=20)
-    retry_delays: list[float] = Field(default_factory=lambda: [5.0, 15.0, 60.0])
-    poll_interval: float = Field(default=0.5, gt=0, le=60)
-    overwrite: bool = False
+class RequestSettings(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    max_workers: int = Field(default=4, ge=1, le=32, strict=True)
+    max_retries: int = Field(default=3, ge=0, le=20, strict=True)
+    retry_delays: list[Annotated[FiniteFloat, Field(ge=0, strict=True)]] = Field(default_factory=lambda: [5.0, 15.0, 60.0], min_length=1)
+    poll_interval: float = Field(default=5, ge=1, le=3600, strict=True, allow_inf_nan=False)
 
 
 class AppSettings(BaseModel):
@@ -24,7 +23,7 @@ class AppSettings(BaseModel):
 
     database_path: Path = Path("data/ecmwf.sqlite3")
     config_dir: Path = Path("config")
-    download: DownloadSettings = Field(default_factory=DownloadSettings)
+    requests: RequestSettings = Field(default_factory=RequestSettings)
     ai: Dict[str, Any] = Field(default_factory=dict)
 
     @field_validator("database_path", "config_dir", mode="before")
@@ -38,23 +37,17 @@ class AppSettings(BaseModel):
         for key in ("database_path", "config_dir"):
             path = Path(values[key])
             values[key] = path if path.is_absolute() else base / path
-        download = dict(values["download"])
-        output = Path(download["output_dir"])
-        download["output_dir"] = output if output.is_absolute() else base / output
-        values["download"] = download
         return AppSettings.model_validate(values)
 
 
 DEFAULT_APP_CONFIG: dict[str, Any] = {
     "database_path": "data/ecmwf.sqlite3",
     "config_dir": "config",
-    "download": {
-        "output_dir": "data/downloads",
+    "requests": {
         "max_workers": 4,
         "max_retries": 3,
         "retry_delays": [5, 15, 60],
-        "poll_interval": 0.5,
-        "overwrite": False,
+        "poll_interval": 5,
     },
     "ai": {
         "enabled": False,

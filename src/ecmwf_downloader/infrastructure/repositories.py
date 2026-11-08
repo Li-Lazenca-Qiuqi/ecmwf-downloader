@@ -2,14 +2,17 @@
 
 from __future__ import annotations
 
+import json
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Iterable, Optional
 from uuid import uuid4
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import case, func, or_, select
 from sqlalchemy.exc import IntegrityError
 
 from ecmwf_downloader.domain.models import (
+    ACTIVE_STATUSES,
+    ResultAsset,
     SplitStrategy,
     TaskData,
     TaskStatus,
@@ -31,471 +34,326 @@ def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
 
+
 class TaskRepository:
-    def __init__(self, database: Database, retry_delays: Optional[Iterable[float]] = None):
+    def __init__(self, database: Database, retry_delays=None):
         self.database = database
-        configured_delays = tuple(float(delay) for delay in (retry_delays or (5.0, 15.0, 60.0)))
-        self.retry_delays = configured_delays or (5.0,)
+        self.retry_delays = tuple(retry_delays or (5, 15, 60))
 
     @staticmethod
-    def _to_data(row: TaskRow) -> TaskData:
-        return TaskData(
-            id=row.id,
-            dataset_id=row.dataset_id,
-            request_payload=json_loads(row.request_payload),
-            filename=row.filename,
-            output_path=row.output_path,
-            status=TaskStatus(row.status),
-            split_strategy=SplitStrategy(row.split_strategy),
-            progress=row.progress,
-            downloaded_bytes=row.downloaded_bytes,
-            total_bytes=row.total_bytes,
-            retry_count=row.retry_count,
-            max_retries=row.max_retries,
-            next_retry_at=row.next_retry_at,
-            error_message=row.error_message,
-            account_id=row.account_id,
-            cancel_requested=row.cancel_requested,
-            created_at=row.created_at,
-            updated_at=row.updated_at,
-            started_at=row.started_at,
-            completed_at=row.completed_at,
-        )
+    def _to_data(row):
+        data = {name: (json_loads(row.request_payload) if name == 'request_payload'
+                       else json.loads(row.results) if name == 'results'
+                       else getattr(row, name)) for name in TaskData.model_fields}
+        for name, value in data.items():
+            if isinstance(value, datetime) and value.tzinfo is None:
+                data[name] = value.replace(tzinfo=timezone.utc)
+        return TaskData(**data)
 
     @staticmethod
-    def _event(
-        session,
-        *,
-        event_type: str,
-        task_id: Optional[str],
-        payload: dict[str, Any],
-        now: datetime,
-    ) -> TaskEventRow:
-        event = TaskEventRow(
-            task_id=task_id,
-            event_type=event_type,
-            payload=json_dumps(payload),
-            created_at=now,
-        )
-        session.add(event)
-        return event
+    def _event(session, *, event_type, task_id, payload, now):
+        session.add(TaskEventRow(task_id=task_id, event_type=event_type,
+                                 payload=json_dumps(payload), created_at=now))
 
-    def create(
-        self,
-        *,
-        dataset_id: str,
-        request_payload: dict[str, Any],
-        filename: str,
-        output_path: str,
-        split_strategy: SplitStrategy,
-        max_retries: int,
-        overwrite: bool,
-        task_id: Optional[str] = None,
-    ) -> TaskData:
+    def _row(self, session, task_id):
+        row = session.get(TaskRow, task_id)
+        if row is None:
+            raise KeyError(f"请求不存在: {task_id}")
+        return row
+
+    def _change(self, session, row, status, error=None):
+        previous = TaskStatus(row.status)
+        if status != previous and not can_transition(previous, status):
+            raise ValueError(f"非法状态转换: {previous.value} -> {status.value}")
+        row.status = status.value
+        row.updated_at = _utc_now()
+        row.error_message = error
+        row.version += 1
+        if status not in ACTIVE_STATUSES:
+            row.worker_id = None
+            row.lease_expires_at = None
+        if status in {TaskStatus.COMPLETED, TaskStatus.FAILED, TaskStatus.CANCELLED, TaskStatus.EXPIRED}:
+            row.completed_at = row.updated_at
+        if previous != status or error:
+            self._event(session, event_type="task.status_changed", task_id=row.id,
+                        payload={"from": previous.value, "status": status.value, "error_message": error},
+                        now=row.updated_at)
+
+    def create(self, *, dataset_id, request_payload, title, split_strategy=SplitStrategy.NONE,
+               max_retries=3, task_id=None):
         now = _utc_now()
-        row = TaskRow(
-            id=task_id or str(uuid4()),
-            dataset_id=dataset_id,
-            request_payload=json_dumps(request_payload),
-            filename=filename,
-            output_path=output_path,
-            status=TaskStatus.QUEUED.value,
-            split_strategy=split_strategy.value,
-            max_retries=max_retries,
-            overwrite=overwrite,
-            created_at=now,
-            updated_at=now,
-        )
-        with self.database.session() as session:
+        with self.database.session(immediate=True) as session:
+            row = TaskRow(id=task_id or str(uuid4()), dataset_id=dataset_id,
+                          request_payload=json_dumps(request_payload), title=title,
+                          status=TaskStatus.QUEUED.value, split_strategy=split_strategy.value,
+                          max_retries=max_retries, created_at=now, updated_at=now)
             session.add(row)
-            self._event(
-                session,
-                event_type="task.created",
-                task_id=row.id,
-                payload={"status": row.status},
-                now=now,
-            )
-        return self._to_data(row)
+            session.flush()
+            self._event(session, event_type="task.created", task_id=row.id,
+                        payload={"status": row.status}, now=now)
+            return self._to_data(row)
 
-    def get(self, task_id: str) -> Optional[TaskData]:
+    def get(self, task_id):
         with self.database.session() as session:
             row = session.get(TaskRow, task_id)
             return self._to_data(row) if row else None
 
-    def list(
-        self,
-        *,
-        status: Optional[TaskStatus] = None,
-        search: Optional[str] = None,
-        limit: int = 50,
-        offset: int = 0,
-    ) -> tuple[list[TaskData], int]:
+    def list(self, *, status=None, search=None, limit=50, offset=0):
         with self.database.session() as session:
-            query = select(TaskRow)
-            count_query = select(func.count()).select_from(TaskRow)
+            predicates = []
             if status:
-                query = query.where(TaskRow.status == status.value)
-                count_query = count_query.where(TaskRow.status == status.value)
+                predicates.append(TaskRow.status == status.value)
             if search:
-                needle = f"%{search}%"
-                predicate = or_(
-                    TaskRow.id.like(needle),
-                    TaskRow.filename.like(needle),
-                    TaskRow.dataset_id.like(needle),
-                )
-                query = query.where(predicate)
-                count_query = count_query.where(predicate)
-            query = query.order_by(TaskRow.created_at.desc()).limit(limit).offset(offset)
-            rows = list(session.scalars(query))
-            total = int(session.scalar(count_query) or 0)
-            return [self._to_data(row) for row in rows], total
+                needle = '%' + search + '%'
+                predicates.append(or_(TaskRow.id.like(needle), TaskRow.title.like(needle),
+                                      TaskRow.dataset_id.like(needle), TaskRow.remote_request_id.like(needle)))
+            query = select(TaskRow).where(*predicates)
+            total = session.scalar(select(func.count()).select_from(TaskRow).where(*predicates))
+            rows = session.scalars(query.order_by(TaskRow.created_at.desc()).limit(limit).offset(offset))
+            return [self._to_data(row) for row in rows], int(total or 0)
 
-    def summary(self) -> dict[str, Any]:
+    def summary(self):
         with self.database.session() as session:
-            rows = session.execute(
-                select(TaskRow.status, func.count()).group_by(TaskRow.status)
-            ).all()
-            counts = {str(status): int(count) for status, count in rows}
-            total = sum(counts.values())
-            completed = counts.get(TaskStatus.COMPLETED.value, 0)
-            progress_values = session.scalars(
-                select(TaskRow.progress).where(TaskRow.progress.is_not(None))
-            )
-            values = [float(value) for value in progress_values]
-            return {
-                "total": total,
-                "by_status": counts,
-                "completed": completed,
-                "overall_progress": round(sum(values) / len(values), 2) if values else None,
-            }
+            counts = dict(session.execute(select(TaskRow.status, func.count()).group_by(TaskRow.status)).all())
+            return {"total": sum(counts.values()), "by_status": counts,
+                    "completed": counts.get(TaskStatus.COMPLETED.value, 0)}
 
-    def transition(
-        self,
-        task_id: str,
-        target: TaskStatus,
-        *,
-        error_message: Optional[str] = None,
-        next_retry_at: Optional[datetime] = None,
-        worker_id: Optional[str] = None,
-    ) -> TaskData:
-        with self.database.session(immediate=True) as session:
-            row = session.get(TaskRow, task_id)
-            if row is None:
-                raise KeyError(f"任务不存在: {task_id}")
-            return self._transition(session, row, target, error_message=error_message,
-                                    next_retry_at=next_retry_at, worker_id=worker_id)
-
-    def _transition(self, session, row: TaskRow, target: TaskStatus, *,
-                    error_message: Optional[str] = None,
-                    next_retry_at: Optional[datetime] = None,
-                    worker_id: Optional[str] = None) -> TaskData:
-        task_id = row.id
+    def claim_next(self, worker_id, *, account_id=None, mirror_ids=frozenset(), exclude_ids=(), lease_seconds=60, lease_name=None):
         now = _utc_now()
-        current = TaskStatus(row.status)
-        if not can_transition(current, target):
-            raise ValueError(f"非法状态转换: {current.value} -> {target.value}")
-        row.status = target.value
-        row.updated_at = now
-        row.version += 1
-        row.error_message = error_message
-        row.next_retry_at = next_retry_at
-        if target == TaskStatus.RUNNING:
-            row.started_at = row.started_at or now
-            row.worker_id = worker_id
-        if target in {
-            TaskStatus.COMPLETED,
-            TaskStatus.FAILED,
-            TaskStatus.CANCELLED,
-        }:
-            row.completed_at = now
-            row.worker_id = None
-            row.lease_expires_at = None
-        if target == TaskStatus.PENDING:
-            row.cancel_requested = False
-            row.account_id = None
-            row.started_at = None
-            row.completed_at = None
-            row.progress = None
-            row.downloaded_bytes = 0
-            row.total_bytes = None
-            row.retry_count = 0
-            row.next_retry_at = None
-        if target == TaskStatus.CANCELLING:
-            row.cancel_requested = True
-        if target in {TaskStatus.QUEUED, TaskStatus.RETRY_WAIT}:
-            row.cancel_requested = False
-        self._event(
-            session,
-            event_type="task.status_changed",
-            task_id=task_id,
-            payload={
-                "from": current.value,
-                "status": target.value,
-                "error_message": error_message,
-            },
-            now=now,
-        )
-        return self._to_data(row)
-
-    def enqueue(self, task_id: str) -> TaskData:
-        task = self.get(task_id)
-        if task is not None and task.status == TaskStatus.QUEUED:
-            return task
-        return self.transition(task_id, TaskStatus.QUEUED)
-
-    def enqueue_many(self, task_ids: Iterable[str]) -> int:
-        count = 0
-        for task_id in task_ids:
-            try:
-                self.enqueue(task_id)
-            except (KeyError, ValueError):
-                continue
-            count += 1
-        return count
-
-    def request_cancel(self, task_id: str) -> TaskData:
         with self.database.session(immediate=True) as session:
-            row = session.get(TaskRow, task_id)
-            if row is None:
-                raise KeyError(f"任务不存在: {task_id}")
-            current = TaskStatus(row.status)
-            if current in {TaskStatus.CANCELLING, TaskStatus.CANCELLED}:
-                return self._to_data(row)
-            if current in {TaskStatus.PENDING, TaskStatus.QUEUED, TaskStatus.RETRY_WAIT}:
-                return self._transition(session, row, TaskStatus.CANCELLED)
-            if current == TaskStatus.RUNNING:
-                return self._transition(session, row, TaskStatus.CANCELLING)
-            raise ValueError(f"任务当前不可取消: {current.value}")
-
-    def retry(self, task_id: str) -> TaskData:
-        with self.database.session(immediate=True) as session:
-            row = session.get(TaskRow, task_id)
-            if row is None:
-                raise KeyError(f"任务不存在: {task_id}")
-            if row.status not in {TaskStatus.FAILED.value, TaskStatus.CANCELLED.value}:
-                raise ValueError(f"只能重试失败或取消任务: {row.status}")
-            previous = row.status
-            row.status = TaskStatus.QUEUED.value
-            row.cancel_requested = False
-            row.account_id = None
-            row.started_at = None
-            row.completed_at = None
-            row.progress = None
-            row.downloaded_bytes = 0
-            row.total_bytes = None
-            row.retry_count = 0
-            row.next_retry_at = None
-            row.error_message = None
-            row.worker_id = None
-            row.lease_expires_at = None
-            row.updated_at = _utc_now()
-            row.version += 1
-            self._event(session, event_type="task.status_changed", task_id=task_id,
-                        payload={"from": previous, "status": row.status}, now=row.updated_at)
-            return self._to_data(row)
-
-    def update_progress(
-        self,
-        task_id: str,
-        *,
-        downloaded_bytes: int,
-        total_bytes: Optional[int] = None,
-        progress: Optional[float] = None,
-    ) -> Optional[TaskData]:
-        now = _utc_now()
-        with self.database.session() as session:
-            row = session.get(TaskRow, task_id)
+            if lease_name is not None:
+                lease = session.get(SchedulerLeaseRow, lease_name)
+                if lease is None or lease.owner_id != worker_id:
+                    return None
+                expires = lease.expires_at.replace(tzinfo=timezone.utc) if lease.expires_at.tzinfo is None else lease.expires_at
+                if expires <= now:
+                    return None
+            active = [status.value for status in ACTIVE_STATUSES if status != TaskStatus.SUBMITTING]
+            due = select(TaskRow).where(
+                TaskRow.worker_id.is_(None), TaskRow.id.not_in(exclude_ids),
+                or_(TaskRow.next_retry_at.is_(None), TaskRow.next_retry_at <= now),
+                or_(TaskRow.status.in_(active),
+                    (TaskRow.status == 'queued') & (
+                        True if account_id else TaskRow.dataset_id.in_(mirror_ids))))
+            row = session.scalar(due.order_by(
+                case((TaskRow.status == 'cancelling', 0), (TaskRow.status == 'queued', 2), else_=1),
+                TaskRow.next_retry_at.asc(), TaskRow.created_at.asc()).limit(1))
             if row is None:
                 return None
-            row.downloaded_bytes = max(0, int(downloaded_bytes))
-            row.total_bytes = total_bytes
-            row.progress = progress
-            row.updated_at = now
-            row.version += 1
-            self._event(
-                session,
-                event_type="task.progress",
-                task_id=task_id,
-                payload={
-                    "downloaded_bytes": row.downloaded_bytes,
-                    "total_bytes": row.total_bytes,
-                    "progress": row.progress,
-                },
-                now=now,
-            )
-            return self._to_data(row)
-
-    def set_account(self, task_id: str, account_id: str) -> Optional[TaskData]:
-        now = _utc_now()
-        with self.database.session() as session:
-            row = session.get(TaskRow, task_id)
-            if row is None:
-                return None
-            row.account_id = account_id
-            row.updated_at = now
-            row.version += 1
-            return self._to_data(row)
-
-    def claim_next(self, worker_id: str, lease_seconds: int = 60) -> Optional[TaskData]:
-        now = _utc_now()
-        expires = now + timedelta(seconds=lease_seconds)
-        with self.database.session(immediate=True) as session:
-            candidates = list(
-                session.scalars(
-                    select(TaskRow)
-                    .where(TaskRow.status.in_([TaskStatus.QUEUED.value, TaskStatus.RETRY_WAIT.value]))
-                    .order_by(TaskRow.created_at.asc())
-                    .limit(20)
-                )
-            )
-            for row in candidates:
-                if row.status == TaskStatus.RETRY_WAIT.value and row.next_retry_at:
-                    retry_at = row.next_retry_at
-                    if retry_at.tzinfo is None:
-                        retry_at = retry_at.replace(tzinfo=timezone.utc)
-                    if retry_at > now:
-                        continue
-                previous = row.status
-                row.status = TaskStatus.RUNNING.value
-                row.worker_id = worker_id
-                row.lease_expires_at = expires
+            if row.status == 'queued':
+                row.account_id = None if row.dataset_id in mirror_ids else account_id
                 row.started_at = row.started_at or now
-                row.updated_at = now
-                row.version += 1
-                self._event(
-                    session,
-                    event_type="task.status_changed",
-                    task_id=row.id,
-                    payload={"from": previous, "status": "running", "worker_id": worker_id},
-                    now=now,
-                )
-                return self._to_data(row)
-            return None
-
-    def renew_task_lease(self, task_id: str, worker_id: str, lease_seconds: int = 60) -> bool:
-        now = _utc_now()
-        with self.database.session() as session:
-            row = session.get(TaskRow, task_id)
-            if not row or row.worker_id != worker_id or row.status not in {
-                TaskStatus.RUNNING.value,
-                TaskStatus.CANCELLING.value,
-            }:
-                return False
+                self._change(session, row, TaskStatus.SUBMITTING)
+            row.worker_id = worker_id
             row.lease_expires_at = now + timedelta(seconds=lease_seconds)
-            row.updated_at = now
+            return self._to_data(row)
+
+    def record_submission(self, task_id, remote_id, poll_interval):
+        if not remote_id:
+            raise ValueError('远端未返回请求 ID')
+        with self.database.session(immediate=True) as session:
+            row = self._row(session, task_id)
+            if row.status not in {'submitting', 'submission_unknown', 'cancelling'}:
+                return self._to_data(row)
+            row.remote_request_id = remote_id
+            row.remote_status = 'accepted'
+            row.worker_id = None
+            row.lease_expires_at = None
+            row.next_retry_at = _utc_now() + timedelta(seconds=0 if row.cancel_requested else poll_interval)
+            self._change(session, row, TaskStatus.CANCELLING if row.cancel_requested else TaskStatus.ACCEPTED)
+            return self._to_data(row)
+
+    def apply_remote(self, task_id, remote_status, assets, poll_interval, *, remote_id=None):
+        parsed = [ResultAsset.model_validate(asset).model_dump(mode='json') for asset in assets]
+        if remote_status == 'successful' and not parsed:
+            raise ValueError('远端结果为空，尚无可用文件链接')
+        states = {'accepted': TaskStatus.ACCEPTED, 'running': TaskStatus.RUNNING,
+                  'successful': TaskStatus.COMPLETED, 'failed': TaskStatus.FAILED,
+                  'rejected': TaskStatus.FAILED, 'dismissed': TaskStatus.CANCELLED,
+                  'deleted': TaskStatus.EXPIRED, 'expired': TaskStatus.EXPIRED}
+        if remote_status not in states:
+            raise ValueError('远端返回了无法识别的作业状态')
+        with self.database.session(immediate=True) as session:
+            row = self._row(session, task_id)
+            if row.status not in {state.value for state in ACTIVE_STATUSES}:
+                return self._to_data(row)
+            if remote_id is not None and row.remote_request_id != remote_id:
+                return self._to_data(row)
+            row.worker_id = None
+            row.lease_expires_at = None
+            row.checked_at = _utc_now()
+            row.retry_count = 0
+            if row.cancel_requested:
+                row.next_retry_at = _utc_now()
+                return self._to_data(row)
+            row.remote_status = remote_status
+            target = states[remote_status]
+            if target == TaskStatus.FAILED:
+                self._account_failure(session, row, '远端请求失败')
+            if target == TaskStatus.COMPLETED and row.account_id and not row.account_success_recorded:
+                account = session.get(AccountStateRow, row.account_id)
+                if account is None:
+                    account = AccountStateRow(account_id=row.account_id, used_count=0, fail_count=0, status='active')
+                    session.add(account)
+                account.used_count += 1
+                account.fail_count = 0
+                account.last_used = _utc_now()
+                account.last_error = None
+                row.account_success_recorded = True
+            row.results = json_dumps(parsed) if target == TaskStatus.COMPLETED else '[]'
+            row.next_retry_at = _utc_now() + timedelta(seconds=poll_interval) if target in ACTIVE_STATUSES else None
+            self._change(session, row, target,
+                         '远端请求失败，请查看官方请求详情；可重新提交。' if target == TaskStatus.FAILED else None)
+            return self._to_data(row)
+
+    @staticmethod
+    def _account_failure(session, row, message):
+        if not row.account_id:
+            return
+        account = session.get(AccountStateRow, row.account_id)
+        if account is None:
+            account = AccountStateRow(account_id=row.account_id, used_count=0, fail_count=0, status='active')
+            session.add(account)
+        account.fail_count += 1
+        account.last_error = message
+        if account.fail_count >= 5:
+            account.status = 'disabled'
+
+    def submission_failed(self, task_id, message, *, uncertain, rejected=False):
+        with self.database.session(immediate=True) as session:
+            row = self._row(session, task_id)
+            target = TaskStatus.SUBMISSION_UNKNOWN if uncertain else TaskStatus.FAILED
+            if rejected and row.status != 'failed':
+                row.remote_status = 'rejected'
+                self._account_failure(session, row, message)
+            self._change(session, row, target, message)
+            return self._to_data(row)
+
+    def query_failed(self, task_id, message):
+        with self.database.session(immediate=True) as session:
+            row = self._row(session, task_id)
+            if row.status not in {status.value for status in ACTIVE_STATUSES}:
+                return self._to_data(row)
+            row.worker_id = None
+            row.lease_expires_at = None
+            row.retry_count += 1
+            if row.retry_count > row.max_retries:
+                self._change(session, row, TaskStatus.FAILED,
+                             message + ' 查询重试已用尽；重试将继续处理原远端请求。')
+                row.next_retry_at = None
+            else:
+                delay = self.retry_delays[min(row.retry_count - 1, len(self.retry_delays) - 1)]
+                row.next_retry_at = _utc_now() + timedelta(seconds=delay)
+                row.error_message = message
+                row.updated_at = _utc_now()
+                self._event(session, event_type='task.query_retry', task_id=row.id,
+                            payload={'retry_count': row.retry_count, 'status': row.status}, now=row.updated_at)
+            return self._to_data(row)
+
+    def request_cancel(self, task_id):
+        with self.database.session(immediate=True) as session:
+            row = self._row(session, task_id)
+            if row.status in {'cancelled', 'cancelling'}:
+                return self._to_data(row)
+            if row.status == 'queued':
+                self._change(session, row, TaskStatus.CANCELLED)
+            elif row.status in {'submitting', 'accepted', 'running', 'refreshing'} or (
+                    row.status == 'failed' and row.remote_request_id and row.remote_status not in {'failed', 'rejected'}):
+                row.cancel_requested = True
+                row.retry_count = 0
+                row.next_retry_at = None
+                self._change(session, row, TaskStatus.CANCELLING)
+            else:
+                raise ValueError('此请求当前不能取消；提交结果不明确时须先关联远端 ID')
+            return self._to_data(row)
+
+    def finish_cancelled(self, task_id):
+        with self.database.session(immediate=True) as session:
+            row = self._row(session, task_id)
+            row.results = '[]'
+            row.remote_status = 'dismissed'
+            row.next_retry_at = None
+            self._change(session, row, TaskStatus.CANCELLED)
+            return self._to_data(row)
+
+    def retry(self, task_id):
+        with self.database.session(immediate=True) as session:
+            row = self._row(session, task_id)
+            if row.status not in {'failed', 'expired', 'cancelled'}:
+                raise ValueError('只能重试失败请求或明确重新提交失效/取消的请求')
+            resume = row.status == 'failed' and row.remote_request_id and row.remote_status not in {'failed','rejected','dismissed'}
+            row.retry_count = 0
+            row.next_retry_at = None
+            row.completed_at = None
+            if resume:
+                self._change(session, row, TaskStatus.CANCELLING if row.cancel_requested else TaskStatus.ACCEPTED)
+            else:
+                self._event(session, event_type='task.resubmitted', task_id=row.id,
+                            payload={'previous_request_id': row.remote_request_id}, now=_utc_now())
+                row.account_success_recorded = False
+                row.remote_request_id = None
+                row.remote_status = None
+                row.results = '[]'
+                row.cancel_requested = False
+                row.started_at = None
+                self._change(session, row, TaskStatus.QUEUED)
+            return self._to_data(row)
+
+    def request_refresh(self, task_id):
+        with self.database.session(immediate=True) as session:
+            row = self._row(session, task_id)
+            if row.status != 'completed':
+                raise ValueError('仅就绪结果可刷新链接')
+            row.next_retry_at = None
+            self._change(session, row, TaskStatus.REFRESHING)
+            return self._to_data(row)
+
+    def attach_remote(self, task_id, remote_id):
+        with self.database.session(immediate=True) as session:
+            row = self._row(session, task_id)
+            if row.status != 'submission_unknown':
+                raise ValueError('仅提交结果不明确的请求可关联远端 ID')
+            row.remote_request_id = remote_id
+            row.remote_status = 'accepted'
+            row.next_retry_at = None
+            self._change(session, row, TaskStatus.CANCELLING if row.cancel_requested else TaskStatus.ACCEPTED)
+            return self._to_data(row)
+
+    def renew_task_lease(self, task_id, worker_id, lease_seconds=60):
+        with self.database.session(immediate=True) as session:
+            row = session.get(TaskRow, task_id)
+            if row is None or row.worker_id != worker_id:
+                return False
+            row.lease_expires_at = _utc_now() + timedelta(seconds=lease_seconds)
             return True
 
-    def recover_stale(self) -> list[str]:
+    def recover_stale(self):
         now = _utc_now()
-        recovered: list[str] = []
-        with self.database.session() as session:
-            rows = list(
-                session.scalars(
-                    select(TaskRow).where(
-                        TaskRow.status.in_([
-                            TaskStatus.RUNNING.value,
-                            TaskStatus.CANCELLING.value,
-                        ])
-                    )
-                )
-            )
+        recovered = []
+        with self.database.session(immediate=True) as session:
+            rows = session.scalars(select(TaskRow).where(
+                TaskRow.worker_id.is_not(None),
+                or_(TaskRow.lease_expires_at.is_(None), TaskRow.lease_expires_at <= now)))
             for row in rows:
-                expires = row.lease_expires_at
-                if expires and expires.tzinfo is None:
-                    expires = expires.replace(tzinfo=timezone.utc)
-                if expires and expires > now:
-                    continue
-                previous = row.status
-                row.status = (
-                    TaskStatus.CANCELLED.value
-                    if previous == TaskStatus.CANCELLING.value
-                    else TaskStatus.QUEUED.value
-                )
                 row.worker_id = None
                 row.lease_expires_at = None
-                row.cancel_requested = False
-                row.updated_at = now
-                row.version += 1
-                self._event(
-                    session,
-                    event_type="task.recovered",
-                    task_id=row.id,
-                    payload={"from": previous, "status": row.status},
-                    now=now,
-                )
+                if not row.remote_request_id and row.status in {'submitting', 'cancelling'}:
+                    self._change(session, row, TaskStatus.SUBMISSION_UNKNOWN, '进程中断，提交结果不明确；请在官方请求页核实并关联远端 ID。')
+                row.next_retry_at = None
                 recovered.append(row.id)
         return recovered
 
-    def finish_completed(self, task_id: str, publish: Optional[Callable[[], int]] = None) -> TaskData:
-        # 完成与取消共用写事务，先接受的取消会阻止发布最终文件。
+    def delete(self, task_id):
         with self.database.session(immediate=True) as session:
-            row = session.get(TaskRow, task_id)
-            if row is None:
-                raise KeyError(f"任务不存在: {task_id}")
-            if row.status == TaskStatus.CANCELLED.value:
-                return self._to_data(row)
-            if row.status == TaskStatus.CANCELLING.value:
-                return self._transition(session, row, TaskStatus.CANCELLED)
-            if row.status != TaskStatus.RUNNING.value:
-                raise ValueError(f"任务当前不可完成: {row.status}")
-            if publish is not None:
-                size = publish()
-                row.downloaded_bytes = size
-                row.total_bytes = size
-                row.progress = 100
-                self._event(session, event_type="task.progress", task_id=task_id,
-                            payload={"downloaded_bytes": size, "total_bytes": size, "progress": 100},
-                            now=_utc_now())
-            return self._transition(session, row, TaskStatus.COMPLETED)
-
-    def finish_failure(self, task_id: str, message: str, *, retryable: bool = True) -> TaskData:
-        with self.database.session(immediate=True) as session:
-            row = session.get(TaskRow, task_id)
-            if row is None:
-                raise KeyError(f"任务不存在: {task_id}")
-            if row.status == TaskStatus.CANCELLED.value:
-                return self._to_data(row)
-            if row.status == TaskStatus.CANCELLING.value:
-                return self._transition(session, row, TaskStatus.CANCELLED)
-            if row.status != TaskStatus.RUNNING.value:
-                raise ValueError(f"任务当前不可记录失败: {row.status}")
-            if not retryable or row.retry_count >= row.max_retries:
-                return self._transition(session, row, TaskStatus.FAILED, error_message=message)
-            row.retry_count += 1
-            delay = self.retry_delays[min(row.retry_count - 1, len(self.retry_delays) - 1)]
-            row.next_retry_at = _utc_now() + timedelta(seconds=delay)
-            row.status = TaskStatus.RETRY_WAIT.value
-            row.error_message = message
-            row.worker_id = None
-            row.lease_expires_at = None
-            row.updated_at = _utc_now()
-            row.version += 1
-            self._event(session, event_type="task.retry_scheduled", task_id=task_id,
-                        payload={"status": row.status, "retry_count": row.retry_count,
-                                 "next_retry_at": row.next_retry_at.isoformat()}, now=row.updated_at)
-            return self._to_data(row)
-
-    def delete(self, task_id: str) -> bool:
-        now = _utc_now()
-        with self.database.session() as session:
             row = session.get(TaskRow, task_id)
             if row is None:
                 return False
-            if row.status in {
-                TaskStatus.QUEUED.value,
-                TaskStatus.RUNNING.value,
-                TaskStatus.RETRY_WAIT.value,
-                TaskStatus.CANCELLING.value,
-            }:
-                raise ValueError("排队或运行中的任务必须先取消后删除")
+            if row.status in {'queued','submission_unknown'} | {state.value for state in ACTIVE_STATUSES}:
+                raise ValueError('先结束或核实请求，再删除本地记录')
+            if row.status == 'failed' and row.remote_request_id and row.remote_status not in {'failed','rejected','dismissed','expired'}:
+                raise ValueError('远端请求仍可能运行，请先继续监视或取消后删除')
             session.delete(row)
-            self._event(
-                session,
-                event_type="task.deleted",
-                task_id=task_id,
-                payload={},
-                now=now,
-            )
+            self._event(session, event_type='task.deleted', task_id=task_id, payload={}, now=_utc_now())
             return True
 
     def events_after(self, event_id: int = 0, limit: int = 100) -> list[dict[str, Any]]:
@@ -528,7 +386,7 @@ class LeaseRepository:
         now = _utc_now()
         expires = now + timedelta(seconds=lease_seconds)
         try:
-            with self.database.session() as session:
+            with self.database.session(immediate=True) as session:
                 row = session.get(SchedulerLeaseRow, name)
                 if row is None:
                     session.add(
@@ -553,7 +411,7 @@ class LeaseRepository:
             # Two independent processes can both observe an empty lease table.
             # The losing insert is retried as a read after its transaction rolls
             # back, so it reports contention instead of leaking an SQL error.
-            with self.database.session() as session:
+            with self.database.session(immediate=True) as session:
                 row = session.get(SchedulerLeaseRow, name)
                 if row is None:
                     return False
@@ -573,7 +431,7 @@ class LeaseRepository:
 
     def renew(self, name: str, owner_id: str, lease_seconds: int = 30) -> bool:
         now = _utc_now()
-        with self.database.session() as session:
+        with self.database.session(immediate=True) as session:
             row = session.get(SchedulerLeaseRow, name)
             if not row or row.owner_id != owner_id:
                 return False
@@ -582,7 +440,7 @@ class LeaseRepository:
             return True
 
     def release(self, name: str, owner_id: str) -> None:
-        with self.database.session() as session:
+        with self.database.session(immediate=True) as session:
             row = session.get(SchedulerLeaseRow, name)
             if row and row.owner_id == owner_id:
                 session.delete(row)

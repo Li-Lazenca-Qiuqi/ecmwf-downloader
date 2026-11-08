@@ -4,7 +4,7 @@ title: 'PRD: 0.5.0_acceptance'
 status: Draft
 assignee: []
 created_date: '2026-10-25T08:18:00Z'
-updated_date: '2026-10-25T08:18:00Z'
+updated_date: '2026-10-27T16:21:00Z'
 labels:
   - requirements
 dependencies: []
@@ -42,3 +42,9 @@ dependencies: []
 
 已发现的旧功能缺口进入 Backlog，本轮不扩展到全部界面重构或调度器重写。真实下载未成功时，不使用 mock、文件存在或本地预览替代科学内容验收。版本、Git 提交、Tag 和外部发布均不在本轮授权内。
 <!-- SECTION:DESCRIPTION:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+2026-10-28 经用户确认的 DRAFT-7 已实施：软件改为提交请求、监视远端状态并交付链接；取消本地下载、输出目录/浏览/覆盖、传输进度和 ARCO 本地导出。请求字段、AI、官方规模与年月日拆分等仍适用；本草案中冲突的旧输出/下载要求被新路线取代，不代表旧要求已修复或重新验收。实施证据见 TASK-32。
+<!-- SECTION:NOTES:END -->

@@ -40,27 +40,26 @@ class Base(DeclarativeBase):
 
 
 class TaskRow(Base):
-    __tablename__ = "tasks"
-
+    __tablename__ = "request_tasks"
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
     dataset_id: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
     request_payload: Mapped[str] = mapped_column(Text, nullable=False)
-    filename: Mapped[str] = mapped_column(String(512), nullable=False)
-    output_path: Mapped[str] = mapped_column(Text, nullable=False)
+    title: Mapped[str] = mapped_column(Text, nullable=False)
     status: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
     split_strategy: Mapped[str] = mapped_column(String(16), nullable=False, default="none")
-    progress: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
-    downloaded_bytes: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    total_bytes: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    remote_request_id: Mapped[Optional[str]] = mapped_column(String(255), index=True)
+    remote_status: Mapped[Optional[str]] = mapped_column(String(32))
+    results: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
+    account_success_recorded: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    checked_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
     retry_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     max_retries: Mapped[int] = mapped_column(Integer, nullable=False, default=3)
     next_retry_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
     error_message: Mapped[Optional[str]] = mapped_column(Text)
     account_id: Mapped[Optional[str]] = mapped_column(String(128), index=True)
     cancel_requested: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
-    worker_id: Mapped[Optional[str]] = mapped_column(String(128), index=True)
+    worker_id: Mapped[Optional[str]] = mapped_column(String(128))
     lease_expires_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
-    overwrite: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
     started_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
@@ -68,7 +67,7 @@ class TaskRow(Base):
     version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
 
 class TaskEventRow(Base):
-    __tablename__ = "task_events"
+    __tablename__ = "request_events"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     # Events intentionally outlive deleted tasks so that the SSE stream can

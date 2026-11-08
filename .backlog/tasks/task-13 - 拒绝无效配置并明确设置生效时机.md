@@ -4,7 +4,7 @@ title: 拒绝无效配置并明确设置生效时机
 status: To Do
 assignee: []
 created_date: '2026-10-23T15:01:00Z'
-updated_date: '2026-10-25T15:51:00Z'
+updated_date: '2026-10-27T16:32:00Z'
 labels:
   - migration
 milestone: m-1
@@ -40,4 +40,6 @@ ordinal: 13000
 
 <!-- SECTION:NOTES:BEGIN -->
 2026-10-25 当前简化设置页已经明确并发和轮询等调度器参数重启后生效；本任务不要求补做完整热更新。仍需修复 CLI/API 更新先落盘后校验和保存失败保护，故保留活动待办。
+
+2026-10-28 DRAFT-7 改用 requests 配置；新增严格类型、范围和退避列表验证，非法请求配置保存前拒绝，后续调度读取新参数。此子范围 7 类无效配置/持久化前拒绝已验证。非敏感配置写入失败的原子性等原任务要求仍未补齐，因此保留 To Do，不冒称整体完成。
 <!-- SECTION:NOTES:END -->

@@ -53,7 +53,7 @@ def test_api_create_preview_and_cancel(tmp_path: Path):
         assert created.status_code == 200
         task_id = created.json()["items"][0]["id"]
         assert created.json()["items"][0]["status"] == "queued"
-        assert client.post(f"/api/v1/tasks/{task_id}/enqueue").json()["status"] == "queued"
+        assert client.post(f"/api/v1/tasks/{task_id}/enqueue").status_code in {404, 405}
         assert client.post(f"/api/v1/tasks/{task_id}/cancel").json()["status"] == "cancelled"
         assert client.post("/api/v1/tasks/actions/delete", json={"task_ids": [task_id]}).json() == {"affected": 1}
 
@@ -74,3 +74,12 @@ def test_api_rejects_ai_secret_in_public_settings(tmp_path: Path):
         assert "secrets.yaml" in response.json()["detail"]
         app_config = tmp_path / "config" / "app.yaml"
         assert not app_config.exists() or "do-not-store" not in app_config.read_text(encoding="utf-8")
+
+def test_validation_does_not_echo_credential_input(tmp_path):
+    container=AppContainer(AppSettings(database_path=tmp_path/"db",config_dir=tmp_path/"config"))
+    try:
+        with TestClient(create_app(container,with_worker=False)) as client:
+            invalid=client.post("/api/v1/accounts",json={"email":"test@example.invalid","key":["private-key-in-input"]})
+            assert invalid.status_code==422 and "private-key-in-input" not in invalid.text
+    finally:
+        container.database.engine.dispose()

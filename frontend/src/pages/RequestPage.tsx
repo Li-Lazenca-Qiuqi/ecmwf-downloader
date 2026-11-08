@@ -1,36 +1,81 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Download, Loader2 } from 'lucide-react'
+import { Send, Loader2, ListFilter } from 'lucide-react'
 import { api, type RequestBody } from '../lib/api'
-import { ErrorNotice } from '../components'
+import { ErrorNotice, Loading } from '../components'
+import CardSelect from '../CardSelect'
+import { defaultsFor, fieldErrors, activeValues, requestPayload, type Payload } from '../requestFields'
+import FormFields from '../features/request/FormFields'
+import DatasetPicker from '../features/request/DatasetPicker'
+import AIParameterPanel from '../features/request/AIParameterPanel'
+import RequestSizePanel from '../features/request/RequestSizePanel'
+import RequestPreviewCode from '../features/request/RequestPreviewCode'
 
-const initialPayload = JSON.stringify({ product_type: ['reanalysis'], variable: ['2m_temperature'], year: ['2024'], month: ['01'], day: ['01'], time: ['00:00'], area: [31, 120, 30, 121], data_format: 'netcdf', download_format: 'unarchived' }, null, 2)
-function parsePayload(text: string): Record<string, unknown> {
-  let value: unknown
-  try { value = JSON.parse(text) } catch { throw new Error('请求参数必须是有效的 JSON，请检查逗号、引号和括号。') }
-  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('请求参数必须是 JSON 对象。')
-  return value as Record<string, unknown>
-}
+const sources = { cds: 'CDS · Copernicus', ncar: 'NCAR AWS ERA5', gdex: 'NCAR GDEX ERA5' }
+const sourceOptions = Object.entries(sources).map(([value, label]) => ({ value: value as keyof typeof sources, label }))
+const splitOptions = [
+  { value: 'none', label: '不拆分' },
+  { value: 'year', label: '按年' },
+  { value: 'month', label: '按月' },
+  { value: 'day', label: '按日' },
+]
+const initialDatasets = { ncar: 'mirror-ncar-era5', gdex: 'mirror-ncar-gdex-era5', cds: 'reanalysis-era5-single-levels' }
 export default function RequestPage() {
+  const [source, setSource] = useState<keyof typeof sources>('cds')
+  return <RequestEditor key={source} source={source} onSourceChange={setSource} />
+}
+
+function RequestEditor({ source, onSourceChange }: { source: keyof typeof sources; onSourceChange: (source: keyof typeof sources) => void }) {
   const navigate = useNavigate()
   const queryClient = useQueryClient()
-  const [datasetId, setDatasetId] = useState('reanalysis-era5-single-levels')
-  const [payloadText, setPayloadText] = useState(initialPayload)
+  const [datasetInput, setDatasetInput] = useState(initialDatasets[source])
+  const [datasetId, setDatasetId] = useState(initialDatasets[source])
+  const [prefixInput, setPrefixInput] = useState('e5.oper.an.sfc/202401/')
+  const [prefix, setPrefix] = useState('e5.oper.an.sfc/202401/')
+  const [payload, setPayload] = useState<Payload>({})
   const [split, setSplit] = useState('none')
-  const [outputDir, setOutputDir] = useState('')
-  const [prompt, setPrompt] = useState('')
-  const [showAI, setShowAI] = useState(false)
-  const datasets = useQuery({ queryKey: ['datasets'], queryFn: api.datasets })
-  const settings = useQuery({ queryKey: ['settings'], queryFn: api.settings })
-  const schema = useQuery({ queryKey: ['schema', datasetId], queryFn: () => api.schema(datasetId), enabled: showAI && !!datasetId.trim() })
-  const body = (): RequestBody => {
-    if (!datasetId.trim()) throw new Error('请输入数据集 ID。')
-    return { dataset_id: datasetId.trim(), request_payload: parsePayload(payloadText), split_strategy: split, ...(outputDir.trim() ? { output_dir: outputDir.trim() } : {}) }
-  }
-  const preview = useMutation({ mutationFn: async () => api.preview(body()) })
+  const [aiNotice, setAiNotice] = useState('')
+  const [aiUndo, setAiUndo] = useState<{ payload: Payload; version: number } | null>(null)
+  const initialized = useRef('')
+  const version = useRef(0)
+  const schema = useQuery({ queryKey: ['request-schema', datasetId, prefix], queryFn: () => api.schema(datasetId, false, prefix), enabled: !!datasetId, retry: false, staleTime: 300000 })
+  const fileSource = schema.data?.capabilities?.file_selection ?? (source === 'ncar' || source === 'gdex')
+  const fields = schema.data?.support_status === 'unavailable' ? [] : schema.data?.fields || []
+  useEffect(() => {
+    const identity = `${datasetId}/${schema.data?.revision || ''}`
+    if (schema.data?.collection_id === datasetId && schema.data.fields.length && initialized.current !== identity) {
+      const sameDataset = initialized.current.startsWith(`${datasetId}/`)
+      initialized.current = identity
+      version.current += 1
+      if (!sameDataset) setPayload(defaultsFor(schema.data.fields))
+      else { setAiNotice('字段定义已更新，已保留当前输入，请检查有效性或重置默认值。'); setAiUndo(null) }
+      setSplit((current) => schema.data?.capabilities?.split_strategies.includes(current) ? current : 'none')
+    }
+  }, [schema.data, datasetId])
+  const errors = fieldErrors(fields, payload)
+  const loaded = !!fields.length && schema.data?.source !== 'error'
+  const valid = loaded && !errors.length && datasetInput.trim() === datasetId && (!fileSource || prefixInput.trim() === prefix)
+  const selection = activeValues(fields, payload)
+  const compiled = requestPayload(fields, payload)
+  const body: RequestBody = { dataset_id: datasetId, request_payload: compiled, split_strategy: split, ...(schema.data?.revision ? { schema_revision: schema.data.revision, editor_values: selection } : {}) }
+  const bodyKey = JSON.stringify(body)
+  const [stableBody, setStableBody] = useState(bodyKey)
+  useEffect(() => { const timer = setTimeout(() => setStableBody(bodyKey), 400); return () => clearTimeout(timer) }, [bodyKey])
+  const preview = useQuery({ queryKey: ['request-preview', bodyKey], queryFn: () => api.preview(JSON.parse(bodyKey)), enabled: valid && stableBody === bodyKey, retry: false })
+  const selectionKey = JSON.stringify({ datasetId, revision: schema.data?.revision, compiled })
+  const [stableSelection, setStableSelection] = useState(selectionKey)
+  useEffect(() => { const timer = setTimeout(() => setStableSelection(selectionKey), 600); return () => clearTimeout(timer) }, [selectionKey])
+  const constraints = useQuery({ queryKey: ['request-constraints', selectionKey], queryFn: () => api.constraints(datasetId, compiled), enabled: loaded && stableSelection === selectionKey, retry: false })
+  const constraintErrors = Object.entries(selection).flatMap(([name, value]) => {
+    const field = fields.find((item) => item.name === name)
+    if (!field?.options.length) return []
+    if (split === 'day' && ['day', 'days'].includes(name) && preview.data?.warnings?.length) return []
+    const allowed = constraints.data?.source === 'online' ? constraints.data.constraints[name] : undefined
+    return allowed !== undefined && (Array.isArray(value) ? value : [value]).some((item) => !allowed.some((option) => option === item)) ? [`${name}：当前组合不符合数据集约束，请调整选择。`] : []
+  })
   const create = useMutation({
-    mutationFn: async () => api.createTasks(body()),
+    mutationFn: () => api.createTasks(body),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ['tasks'] })
       void queryClient.invalidateQueries({ queryKey: ['summary'] })
@@ -38,40 +83,106 @@ export default function RequestPage() {
     },
   })
   const suggestion = useMutation({
-    mutationFn: async () => {
-      const current = parsePayload(payloadText)
-      const result = await api.suggestion({ field_schema: schema.data || {}, user_request: prompt })
+    mutationFn: async (snapshot: { version: number; datasetId: string; prompt: string; payload: Payload }) => {
+      if (!schema.data) throw new Error('请先获取数据集字段。')
+      const result = await api.suggestion({ field_schema: { ...schema.data, current_selection: snapshot.payload }, user_request: snapshot.prompt })
+      if (snapshot.version !== version.current) return { snapshot, candidate: {} as Payload }
       const candidate = result.suggestion.parameters || result.suggestion.request_payload || result.suggestion
-      if (!candidate || typeof candidate !== 'object' || Array.isArray(candidate)) throw new Error('AI 没有返回有效的参数对象。')
-      return JSON.stringify({ ...current, ...candidate }, null, 2)
+      if (!candidate || typeof candidate !== 'object' || Array.isArray(candidate)) throw new Error('AI 未返回有效的参数对象。')
+      const validation = fieldErrors(fields, candidate as Payload, false)
+      if (validation.length) throw new Error(`AI 建议未应用：${validation.join(' ')}`)
+      if (!Object.keys(candidate).length) throw new Error('AI 未给出可用参数，请补充需求后重试。')
+      return { snapshot, candidate: candidate as Payload }
     },
-    onSuccess: (text) => { setPayloadText(text); preview.reset(); create.reset() },
+    onSuccess: ({ snapshot, candidate }) => {
+      if (snapshot.version !== version.current) { setAiNotice('需求、参数或数据集已改变，未应用过期的 AI 建议。'); return }
+      create.reset()
+      setPayload((current) => ({ ...current, ...candidate }))
+      version.current += 1
+      setAiUndo({ payload: snapshot.payload, version: version.current })
+      setAiNotice(`已回填 ${Object.keys(candidate).length} 个参数，请检查字段和下方请求预览。`)
+    },
   })
-  const changed = () => { preview.reset(); create.reset() }
-  const busy = create.isPending || preview.isPending || suggestion.isPending
-  return <section className="page request-page">
-    <div className="page-heading"><div><h1>添加任务</h1><p>填写请求，添加后自动进入下载队列。</p></div></div>
-    <form className="panel request-form" onSubmit={(event) => { event.preventDefault(); if (!busy) create.mutate() }}>
-      <fieldset disabled={busy}>
-        <label>数据集<input list="dataset-options" value={datasetId} onChange={(event) => { setDatasetId(event.target.value); changed() }} required placeholder="输入 CDS 数据集 ID" /></label>
-        <datalist id="dataset-options">{datasets.data?.items.map((dataset) => <option key={dataset.id} value={dataset.id}>{dataset.title}</option>)}</datalist>
-        <label>请求参数（JSON）<textarea className="payload-editor" rows={16} value={payloadText} onChange={(event) => { setPayloadText(event.target.value); changed() }} spellCheck={false} required /></label>
-        <p className="helper">可以粘贴 CDS 页面导出的请求参数，保留数组、数字等原始类型。</p>
-        <details className="advanced"><summary>输出与拆分</summary><div className="form-grid">
-          <label>输出目录<input value={outputDir} onChange={(event) => { setOutputDir(event.target.value); changed() }} placeholder={settings.data?.download.output_dir || '使用后台配置的目录'} /></label>
-          <label>拆分方式<select value={split} onChange={(event) => { setSplit(event.target.value); changed() }}><option value="none">不拆分</option><option value="year">按年</option><option value="month">按年月</option></select></label>
-        </div><p className="helper">目录位于运行后台服务的机器上。拆分只按请求中的数据日期生成多个任务。</p></details>
-        <details className="advanced" onToggle={(event) => setShowAI(event.currentTarget.open)}><summary>AI 参数建议（可选）</summary>
-          <p className="helper">需要预先配置 AI 服务，建议生成后请检查参数。</p>
-          <label>需求描述<textarea rows={3} value={prompt} onChange={(event) => setPrompt(event.target.value)} /></label>
-          <button type="button" className="button" disabled={!prompt.trim() || schema.isPending || !!schema.error || !settings.data?.ai.enabled} onClick={() => suggestion.mutate()}>{suggestion.isPending ? '生成中…' : '生成建议'}</button>
-          {settings.data && !settings.data.ai.enabled && <p className="helper">AI 服务尚未启用，可通过 CLI 配置。</p>}
-          <ErrorNotice error={schema.error || suggestion.error} />
-        </details>
+  const editParameters = () => {
+    version.current += 1
+    setAiUndo(null); setAiNotice('')
+    if (!suggestion.isPending) suggestion.reset()
+  }
+  const changeField = (name: string, value: unknown) => {
+    editParameters()
+    create.reset()
+    setPayload((current) => {
+      const next = { ...current }
+      if (value === undefined || Array.isArray(value) && !value.length) delete next[name]
+      else next[name] = value
+      if (fields.find((field) => field.name === name)?.field_type === 'exclusive' && typeof value === 'string' && next[value] === undefined) {
+        const defaultValue = fields.find((field) => field.name === value)?.default
+        if (defaultValue !== undefined && defaultValue !== null) next[value] = structuredClone(defaultValue)
+      }
+      return next
+    })
+  }
+  const loadDataset = (selectedId?: string) => {
+    const next = (selectedId ?? datasetInput).trim()
+    if (!next) return
+    setDatasetInput(next)
+    version.current += 1
+    setAiUndo(null)
+    suggestion.reset(); create.reset(); setAiNotice('')
+    if (next !== datasetId) { initialized.current = ''; setPayload({}); setSplit('none'); setDatasetId(next) }
+    else void queryClient.fetchQuery({ queryKey: ['request-schema', next, prefix], queryFn: () => api.schema(next, true, prefix), staleTime: 0 })
+  }
+  const requestNames = new Set(fields.filter((field) => field.request_field).map((field) => field.name))
+  const canSplit = (strategy: string) => schema.data?.capabilities ? schema.data.capabilities.split_strategies.includes(strategy) : (strategy === 'year' ? ['year'] : strategy === 'month' ? ['year', 'month'] : ['year', 'month', 'day']).every((name) => requestNames.has(name) || requestNames.has(`${name}s`))
+  const constraintsReady = stableSelection === selectionKey && !constraints.isFetching && (!!constraints.data || constraints.isError)
+  const canCreate = valid && !schema.isFetching && constraintsReady && !constraintErrors.length && !preview.isError && !!preview.data && stableBody === bodyKey && !preview.isFetching
+  return <section className="page request-builder-page">
+    <div className="page-heading request-heading">
+      <div><h1>提交请求</h1><p>选择数据集和参数，提交后自动监视处理状态。</p></div>
+      <CardSelect className="request-source-label" label="数据来源" showLabel value={source} options={sourceOptions} onChange={onSourceChange} />
+    </div>
+    <form id="download-request-form" className="request-builder-layout" onSubmit={(event) => { event.preventDefault(); if (canCreate && !create.isPending) create.mutate() }}><section className="panel request-form">
+      <fieldset disabled={create.isPending}>
+        <DatasetPicker source={source} value={datasetInput} onChange={(value) => { setDatasetInput(value); editParameters() }} onSelect={loadDataset}
+          actions={<button type="button" className="button" disabled={!datasetInput.trim() || schema.isFetching} onClick={() => loadDataset()}>{schema.isFetching ? <Loader2 size={16} className="spin" /> : <ListFilter size={16} />}获取字段</button>} />
+        {datasetInput.trim() !== datasetId && <p className="notice">请获取所选数据集的字段后继续。</p>}
+        {fileSource && <div className="ncar-directory"><label>产品与年月目录<div className="directory-address"><input aria-label="NCAR 目录" value={prefixInput} onChange={(event) => { setPrefixInput(event.target.value); editParameters() }} placeholder="e5.oper.an.sfc/202401/" /><button type="button" className="button" disabled={schema.isFetching || !prefixInput.trim()} onClick={() => { editParameters(); initialized.current = ''; setPayload({}); if (prefixInput.trim() === prefix) loadDataset(); else setPrefix(prefixInput.trim()) }}>列出文件</button></div></label><details className="field-help"><summary>目录格式</summary><p className="helper">地表：e5.oper.an.sfc/YYYYMM/；压力层：e5.oper.an.pl/YYYYMM/。每个已发布文件生成一个请求。</p></details>{prefixInput.trim() !== prefix && <p className="notice">目录已修改，请重新列出文件后继续。</p>}</div>}
+        <section className="request-parameters"><div className="section-heading"><h2>请求字段{loaded && <span className="field-source">{fields.filter((field) => field.request_field).length} 项 · {schema.data?.source === "cache" ? schema.data.stale ? "过期缓存" : "缓存字段" : "在线字段"}</span>}</h2><button type="button" className="text-button" disabled={!loaded} onClick={() => { editParameters(); setPayload(defaultsFor(fields)); create.reset() }}>重置默认值</button></div>{schema.isPending ? <Loading /> : <>
+          <ErrorNotice error={schema.error} />{schema.data?.error && <p className="notice">{schema.data.error}</p>}
+
+          {schema.data?.support_status === 'partial' && <p className="notice">部分字段尚待适配，可使用已支持的选择路径。</p>}
+          {schema.data?.diagnostics?.filter((item) => item.blocking).map((item) => <p className="notice error" key={`${item.code}/${item.field}`}>{item.message}</p>)}
+          <FormFields key={`${datasetId}/${schema.data?.revision || ""}`} fields={fields} values={payload} onChange={changeField} constraints={constraints.data} />
+          {constraints.data?.error && <p className="notice">{constraints.data.error}</p>}
+          {constraints.isFetching && <p className="helper" role="status">正在更新可选参数约束…</p>}
+          {constraints.error && <p className="notice">约束服务暂不可用，当前只做本地检查，最终是否接受请求以数据来源响应为准。</p>}
+          {constraintErrors.map((message) => <p className="notice error" key={message}>{message}</p>)}
+        </>}</section>
+
       </fieldset>
-      <ErrorNotice error={preview.error || create.error} />
-      {preview.data && <div className="notice preview-result"><strong>本地预览：将添加 {preview.data.items.length} 个任务</strong><ul>{preview.data.items.map((item, index) => <li key={index}>{item.output_path}</li>)}</ul><p>预览不会创建任务，也不代表 CDS 已接受请求。</p></div>}
-      <div className="form-actions"><Link className="button" to="/tasks">返回队列</Link><div className="row-actions"><button type="button" className="button" disabled={busy} onClick={() => preview.mutate()}>预览</button><button className="button primary" type="submit" disabled={busy}>{create.isPending ? <Loader2 size={16} className="spin" /> : <Download size={16} />}添加并下载</button></div></div>
-    </form>
+
+    </section>
+    <aside className="request-assistance" aria-label="参数补全、预览与提交">
+      <fieldset className="request-assistance-controls" disabled={create.isPending}>
+        <AIParameterPanel ready={loaded && datasetInput.trim() === datasetId && !schema.isFetching && (!fileSource || prefixInput.trim() === prefix)} pending={suggestion.isPending} error={suggestion.error} notice={aiNotice} canUndo={!!aiUndo && aiUndo.version === version.current}
+          onEdit={editParameters} onGenerate={(prompt) => { setAiNotice(''); setAiUndo(null); suggestion.mutate({ version: version.current, datasetId, prompt, payload: selection }) }}
+          onUndo={() => { if (aiUndo?.version === version.current) { setPayload(aiUndo.payload); version.current += 1; setAiUndo(null); setAiNotice('已恢复补全前的参数。'); create.reset() } }} />
+      </fieldset>
+      {source === 'cds' && <RequestSizePanel datasetId={datasetId} body={body} ready={valid && !schema.isFetching} disabled={create.isPending} split={split} />}
+      <section className="panel request-preview" aria-label="请求预览"><h2>请求预览</h2><p className="helper">{datasetId} · 只读，随选择实时更新</p><RequestPreviewCode payload={compiled} />{errors.length > 0 && loaded && <details className="validation-list"><summary>待补齐 {errors.length} 项参数</summary>{errors.map((message) => <p key={message}>{message}</p>)}</details>}<ErrorNotice error={preview.error} />{preview.isFetching && <p className="helper">正在计算任务预览…</p>}{preview.data && stableBody === bodyKey && <><details className="output-plan"><summary>将提交 {preview.data.items.length} 个请求</summary>{preview.data.warnings?.map((message) => <p className="notice" key={message}>{message}</p>)}<ul className="output-previews">{preview.data.items.slice(0, 20).map((item, index) => <li key={index}>{item.label}</li>)}</ul>{preview.data.items.length > 20 && <p className="helper">仅显示前 20 个请求摘要。</p>}</details></>}</section>
+      <section className="panel request-output" aria-label="请求拆分与提交"><h2>请求拆分与提交</h2>
+        <fieldset disabled={create.isPending}>
+        <section className="output-section" aria-label="请求拆分">
+          <CardSelect label="拆分方式" showLabel value={split} onChange={value => { setSplit(value); create.reset() }}
+            options={splitOptions.map(option => option.value === 'none' || canSplit(option.value) ? option : {
+              ...option, label: `${option.label}（数据集缺少日期字段）`, disabled: true,
+            })} />
+          <p className="helper">结果就绪后，可在请求队列复制链接。</p>
+        </section>
+        </fieldset>
+      <ErrorNotice error={create.error} />
+      <div className="form-actions"><button type="submit" className="button primary" disabled={!canCreate || create.isPending}>{create.isPending ? <Loader2 size={16} className="spin" /> : <Send size={16} />}提交请求{preview.data && canCreate ? `（${preview.data.items.length} 个请求）` : ''}</button><Link className="button" to="/tasks">返回队列</Link></div>
+      </section>
+    </aside></form>
   </section>
 }

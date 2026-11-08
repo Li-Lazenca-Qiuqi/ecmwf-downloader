@@ -4,7 +4,7 @@ title: 验证本地 HTTP 任务流转与 SSE 重连
 status: Done
 assignee: []
 created_date: '2026-10-23T15:00:00Z'
-updated_date: '2026-10-25T16:02:00Z'
+updated_date: '2026-11-08T09:16:00Z'
 labels:
   - migration
   - historical-evidence
@@ -30,5 +30,5 @@ ordinal: 12000
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
 - [ ] #1 本地任务流转和 SSE 事件恢复结果可追溯
-- [ ] #2 记录明确区分本地 HTTP 与真实 CDS 下载
+- [ ] #2 记录明确区分本地 HTTP 与 SSE 验证和真实 CDS 提交、监视及结果链接验证
 <!-- AC:END -->

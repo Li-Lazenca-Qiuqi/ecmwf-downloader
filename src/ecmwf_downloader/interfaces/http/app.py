@@ -13,13 +13,18 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 
 from ecmwf_downloader.application.container import AppContainer
-from ecmwf_downloader.application.worker import DownloadScheduler
-from ecmwf_downloader.domain.models import AccountStatus, TaskStatus
+from ecmwf_downloader.infrastructure.mirrors import DEFAULT_PREFIX, MIRROR_IDS
+from ecmwf_downloader.infrastructure.cds import ProviderError
+from ecmwf_downloader.application.worker import RequestScheduler
+from ecmwf_downloader.domain.models import AccountStatus, TaskStatus, SplitStrategy
 from ecmwf_downloader.interfaces.http.schemas import (
+    AttachBody,
     AccountCreateBody,
     AccountUpdateBody,
     AISuggestionBody,
+    AIConfigBody,
     BatchBody,
+    CostingBody,
     PreviewBody,
     SettingsPatch,
     TaskCreateBody,
@@ -41,7 +46,7 @@ def _task_json(task):
 
 def create_app(container: Optional[AppContainer] = None, *, with_worker: bool = True) -> FastAPI:
     app_container = container or AppContainer()
-    scheduler = DownloadScheduler(app_container) if with_worker else None
+    scheduler = RequestScheduler(app_container) if with_worker else None
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
@@ -61,6 +66,10 @@ def create_app(container: Optional[AppContainer] = None, *, with_worker: bool = 
     app.state.container = app_container
     app.state.scheduler = scheduler
 
+    @app.exception_handler(ProviderError)
+    async def _provider_error(_request: Request, exc: ProviderError):
+        return _problem(503, str(exc), "数据源服务暂不可用")
+
     @app.exception_handler(ValueError)
     async def _value_error(_request: Request, exc: ValueError):
         return _problem(422, str(exc), "参数或状态无效")
@@ -71,7 +80,10 @@ def create_app(container: Optional[AppContainer] = None, *, with_worker: bool = 
 
     @app.exception_handler(RequestValidationError)
     async def _validation_error(_request: Request, exc: RequestValidationError):
-        return _problem(422, json.dumps(exc.errors(), ensure_ascii=False, default=str), "请求校验失败")
+        if _request.url.path.startswith('/api/v1/ai/'):
+            return _problem(422, 'AI 参数或配置无效，请检查字段类型、服务地址与模型', '请求校验失败')
+        issues = [{"loc": issue["loc"], "msg": issue["msg"], "type": issue["type"]} for issue in exc.errors()]
+        return _problem(422, json.dumps(issues, ensure_ascii=False), "请求校验失败")
 
     @app.exception_handler(HTTPException)
     async def _http_error(_request: Request, exc: HTTPException):
@@ -117,16 +129,14 @@ def create_app(container: Optional[AppContainer] = None, *, with_worker: bool = 
 
     @app.post("/api/v1/requests/preview")
     def preview(body: PreviewBody):
-        return {"items": app_container.tasks.preview(**body.model_dump())}
+        warnings: list[str] = []
+        items = app_container.tasks.preview(**body.model_dump(), warnings=warnings)
+        return {"items": items, "warnings": warnings}
 
     @app.post("/api/v1/tasks")
     def create_task(body: TaskCreateBody):
-        tasks = app_container.tasks.create(**body.model_dump(exclude={"enqueue"}))
+        tasks = app_container.tasks.create(**body.model_dump())
         return {"items": [_task_json(task) for task in tasks]}
-
-    @app.post("/api/v1/tasks/{task_id}/enqueue", include_in_schema=False)
-    def enqueue_task(task_id: str):
-        return _task_json(app_container.tasks.enqueue(task_id))
 
     @app.post("/api/v1/tasks/{task_id}/cancel")
     def cancel_task(task_id: str):
@@ -136,6 +146,22 @@ def create_app(container: Optional[AppContainer] = None, *, with_worker: bool = 
     def retry_task(task_id: str):
         return _task_json(app_container.tasks.retry(task_id))
 
+    @app.post("/api/v1/tasks/{task_id}/refresh")
+    def refresh_task(task_id: str):
+        return _task_json(app_container.tasks.refresh(task_id))
+
+    @app.post("/api/v1/tasks/{task_id}/attach")
+    def attach_task(task_id: str, body: AttachBody):
+        return _task_json(app_container.tasks.attach(task_id, body.remote_request_id))
+
+    @app.get("/api/v1/tasks/{task_id}/links")
+    def result_links(task_id: str):
+        task = app_container.tasks.get(task_id)
+        if task is None:
+            return _problem(404, "请求不存在", "资源不存在")
+        return {"status": task.status, "items": [item.model_dump(mode="json") for item in task.results]
+                if task.status == TaskStatus.COMPLETED else []}
+
     @app.delete("/api/v1/tasks/{task_id}")
     def delete_task(task_id: str):
         if not app_container.tasks.delete(task_id):
@@ -144,9 +170,7 @@ def create_app(container: Optional[AppContainer] = None, *, with_worker: bool = 
 
     @app.post("/api/v1/tasks/actions/{action}")
     def batch_action(action: str, body: BatchBody):
-        if action == "enqueue":
-            count = app_container.tasks.enqueue_many(body.task_ids)
-        elif action == "cancel":
+        if action == "cancel":
             count = sum(_try_action(app_container.tasks.cancel, task_id) for task_id in body.task_ids)
         elif action == "retry":
             count = sum(_try_action(app_container.tasks.retry, task_id) for task_id in body.task_ids)
@@ -157,18 +181,26 @@ def create_app(container: Optional[AppContainer] = None, *, with_worker: bool = 
         return {"affected": count}
 
     @app.get("/api/v1/datasets")
-    def list_datasets():
-        return {"items": app_container.datasets.list()}
+    def list_datasets(q: str = '', refresh: bool = False, source: str = 'cds'):
+        return app_container.datasets.list(q, refresh=refresh, source=source)
 
     @app.get("/api/v1/datasets/{dataset_id}/schema")
-    def dataset_schema(dataset_id: str):
-        account = app_container.accounts.next_available()
-        return app_container.datasets.schema(dataset_id, account)
+    def dataset_schema(dataset_id: str, refresh: bool = False, prefix: str = DEFAULT_PREFIX):
+        account = None if dataset_id in MIRROR_IDS else app_container.accounts.next_available()
+        return app_container.datasets.schema(dataset_id, account, refresh=refresh, prefix=prefix)
 
     @app.post("/api/v1/datasets/{dataset_id}/constraints")
     def dataset_constraints(dataset_id: str, selection: dict):
         account = app_container.accounts.next_available()
-        return {"constraints": app_container.datasets.constraints(dataset_id, selection, account)}
+        return app_container.datasets.constraints(dataset_id, selection, account)
+
+    @app.post("/api/v1/datasets/{dataset_id}/costing")
+    def dataset_costing(dataset_id: str, body: CostingBody):
+        selection = app_container.tasks.prepare_request(dataset_id, body.request_payload,
+                                                       body.schema_revision, body.editor_values,
+                                                       SplitStrategy.NONE)
+        account = None if dataset_id in MIRROR_IDS else app_container.accounts.next_available()
+        return app_container.datasets.costing(dataset_id, selection, account)
 
     @app.get("/api/v1/accounts")
     def list_accounts():
@@ -196,8 +228,6 @@ def create_app(container: Optional[AppContainer] = None, *, with_worker: bool = 
     @app.post("/api/v1/accounts/{account_id}/test")
     def test_account(account_id: str):
         ok, message = app_container.accounts.test(account_id)
-        if not ok:
-            app_container.accounts.record_failure(account_id, message)
         return {"ok": ok, "message": message}
 
     @app.post("/api/v1/accounts/{account_id}/{action}")
@@ -212,6 +242,21 @@ def create_app(container: Optional[AppContainer] = None, *, with_worker: bool = 
         if not app_container.accounts.delete(account_id):
             return _problem(404, f"账号不存在: {account_id}", "资源不存在")
         return {"deleted": True, "id": account_id}
+
+    @app.get('/api/v1/ai/config')
+    def ai_configuration():
+        return app_container.ai.configuration()
+
+    @app.patch('/api/v1/ai/config')
+    def update_ai_configuration(body: AIConfigBody):
+        key = body.api_key.get_secret_value().strip() if body.api_key else ''
+        if body.enabled and not (key or app_container.secrets.ai_config().get('api_key')):
+            return _problem(422, '启用 AI 前请填写 API Key', '配置不完整')
+        # 先校验完整请求；密钥单独保存，留空保留已有密钥。
+        if key:
+            app_container.secrets.update_ai({'api_key': key})
+        app_container.update_settings({'ai': body.model_dump(exclude={'api_key'})})
+        return app_container.ai.configuration()
 
     @app.post("/api/v1/ai/suggestions")
     def ai_suggestion(body: AISuggestionBody):
@@ -242,7 +287,7 @@ def create_app(container: Optional[AppContainer] = None, *, with_worker: bool = 
     @app.get("/api/v1/settings")
     def get_settings():
         values = app_container.settings.model_dump(mode="json")
-        return {"database_path": values["database_path"], "config_dir": values["config_dir"], "download": values["download"], "ai": {key: value for key, value in values["ai"].items() if key != "api_key"}}
+        return {"database_path": values["database_path"], "config_dir": values["config_dir"], "requests": values["requests"], "ai": {key: value for key, value in values["ai"].items() if key != "api_key"}}
 
     @app.patch("/api/v1/settings")
     def patch_settings(body: SettingsPatch):
@@ -292,13 +337,17 @@ def _mount_static(app: FastAPI) -> None:
 
     @app.get("/", include_in_schema=False)
     def root():
-        return FileResponse(index)
+        return FileResponse(index, headers={"Cache-Control": "no-cache"})
 
     @app.get("/{path:path}", include_in_schema=False)
     def spa(path: str):
+        if path.startswith("api/"):
+            raise HTTPException(status_code=404, detail="API 不存在")
         candidate = (static_dir / path).resolve()
         try:
             inside_static = candidate.is_relative_to(static_dir.resolve())
         except AttributeError:  # pragma: no cover - Python 3.10 compatibility guard
             inside_static = str(candidate).startswith(str(static_dir.resolve()))
-        return FileResponse(candidate if inside_static and candidate.is_file() else index)
+        if inside_static and candidate.is_file():
+            return FileResponse(candidate)
+        return FileResponse(index, headers={"Cache-Control": "no-cache"})

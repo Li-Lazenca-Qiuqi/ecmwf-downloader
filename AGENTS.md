@@ -2,109 +2,72 @@
 
 ## 项目背景
 
-本项目是面向 Windows 和 Linux 的单用户 ECMWF/CDS 气象数据下载管理工具，以 CLI 为主要入口，兼顾服务器和本地使用。后端可在后台运行，通过本地 HTTP 端口同源提供 API 与 Web 管理台；Linux 服务器的管理台通过 SSH 端口转发访问，服务仅需回环监听。当前主线版本为 **0.5.0**，要求 Python 3.11+。现有技术验证覆盖 Linux/WSL，Windows 原生文件锁等兼容与验收尚待补齐。
+面向 Windows/Linux 的单用户 ECMWF/CDS 请求与结果链接管理工具，以 CLI 为主要入口，FastAPI 后台同源提供 React/Vite 管理台和 API。Linux 服务器经 SSH 端口转发访问，服务只需回环监听。版本仍为 0.5.0，Python 3.11+；本轮未更新版本。Linux/WSL 已验证，Windows 原生文件锁、权限及后台运行仍待验收。
 
-## 目录结构
+用户已批准 DRAFT-7，实施见 TASK-32：软件只提交请求、监视远端状态并返回结果链接，科学数据传输交给专业下载器。不得重新引入本地下载、ARCO NetCDF 导出、输出目录浏览、覆盖或传输进度，除非用户明确改变需求。
 
-```text
-ecmwf-downloader/
-├── .backlog/                       # 任务、需求、项目文档与里程碑
-├── config/                         # app.yaml（非敏感）和 secrets.yaml（凭据）
-├── data/                           # SQLite 与下载输出
-├── frontend/                       # React + TypeScript + Vite 源码
-├── doc/                            # 论文、报告、附件与历史资料
-├── src/ecmwf_downloader/
-│   ├── domain/                     # 领域模型与状态机
-│   ├── application/                # 用例、请求构建、Worker、组合根
-│   ├── infrastructure/             # SQLite、Repository、CDS、SecretStore
-│   ├── interfaces/cli/             # Typer CLI
-│   ├── interfaces/http/            # FastAPI REST + SSE
-│   └── web/static/                 # Vite 构建产物，随 wheel 发布
-├── tests/test_new/                 # 新架构测试
-├── pyproject.toml
-└── README.md
-```
+## 目录地图
+
+- .backlog/：唯一活动任务、PRD、产品、决策及验收证据，仅 CLI 修改。
+- config/：非敏感 app.yaml 与独立 secrets.yaml，不得输出凭据。
+- data/：SQLite 和既有用户文件；新流程不创建下载文件。
+- frontend/：React + TypeScript + Vite。
+- src/ecmwf_downloader/domain/：字段、状态、请求与结果资产模型。
+- application/：请求编译/拆分、账号/模板及提交监视调度器。
+- infrastructure/：SQLite、仓库、CDS 控制/结果元数据与 NCAR 目录/链接。
+- interfaces/cli/、interfaces/http/：Typer、FastAPI REST/SSE。
+- web/static/：随 wheel 发布的生产前端；tests/test_new/ 为当前架构测试。
+- doc/：研究资料和有效附件；README 对外说明，不承载内部进度。
 
 ## 技术路线
 
-- FastAPI 提供 `/api/v1` REST API 和 `/api/v1/events` SSE；Typer 直接调用应用服务，不依赖 Web。
-- React/Vite 管理台由 `ecmwf web` 同源托管，默认只绑定 `127.0.0.1`。
-- SQLAlchemy + SQLite WAL 保存任务、事件、调度租约、账号运行状态和模板；同一工作区只允许一个调度器租约持有者消费队列。
-- Worker 接收通用 `dataset_id + request_payload`，写 `.part` 后原子重命名；默认不覆盖已有目标。
-- 新任务直接以 `queued` 状态入队，随后为 `running → completed/failed/retry_wait/cancelling/cancelled`；`pending` 仅兼容历史记录，不自动启动。取消与领取、失败重试、最终文件发布使用写事务串行化，状态变化必须写事件。
-- 凭据只放在 `config/secrets.yaml`，现有 Linux 实现使用 `0600` 权限、文件锁、临时文件和原子替换更新；Windows 原生锁与权限保护尚待补齐。不要在日志、DTO 或 CLI 输出密钥。
+- CLI 直接调用应用服务；ecmwf web 通过 127.0.0.1 提供 Web、/api/v1、SSE。不引入非回环监听、多用户认证或本轮未要求的 Electron。
+- domain/schema.py、application/request_compiler.py 保存真实字段、分组、能力和指纹；Web 用 schema_revision + editor_values + request_payload 绑定预览/创建，CLI compile/schema-check 复用。字段分类完整不等于全部远端组合已验收。
+- 官方 CDS 目录完整分页、缓存一小时，按名称/ID 搜索，无账号可查目录；字段、约束、costing、提交需要可用账号，不静默回退为固定 ERA5 字段。
+- 默认 CDS，ecmwf-datastores-client 独立 submit/get_remote/get_results，显式 cleanup=False，不调用 retrieve/download，不读取科学数据文件体，也不自动删除已就绪远端作业。
+- 镜像为 mirror-ncar-era5、mirror-ncar-gdex-era5，分别列目录并用 HEAD 读取文件响应头、返回 HTTPS 链接；一个原文件一个任务，不裁剪或日期拆分，不需要或修改 CDS 账号统计。
+- mirror-arco-era5 已移除，不提供本地 Zarr/NetCDF 导出或伪造远端子集链接。相关可选依赖和 cdsapi 已移除。
+- 新 request_tasks/request_events 保存编译请求、绑定账号、远端 ID/状态与资产列表；原 tasks/task_events 保留但不导入新队列，不清空、删除或重建用户数据库及文件。
+- SQLAlchemy create_all 只建缺失表，无 Alembic、自动 ALTER TABLE 或数据库重建；后续新字段须单独确认。
+- 单一队列自动提交，状态 queued/submitting/accepted/running/refreshing/completed/failed/cancelling/cancelled/expired/submission_unknown；completed 仅表示链接就绪，没有远端百分比就只显示状态。
+- 成功提交立即保存远端 ID 和账号；重启按 ID 继续查询。查询退避重试不重新提交；不明确 POST/中断进入待核实，核对后关联 ID，禁止盲目重发。
+- 取消与就绪共用写事务，远端确认前保持取消中；DELETE 受理信息不等于已取消。监视失败但作业可能运行时，先取消或恢复监视才能删记录。
+- 领取在同一写事务内校验调度租约，换手后的旧拥有者不能领取；安全关停等已发操作保存 ID/状态后才释放租约，运行中也恢复后来过期的旧租约。
+- 请求参数 data_format/download_format 为源站产物格式与封装，仍保留，不代表本地下载开关。
+- 结果 URL/文件名/大小/类型来自真实元数据，有效期未知留空；支持复制、CLI/API 输出与手动更新，失效不自动重提。不将完整签名链接或 API Key 写普通事件/日志。
+- requests 配置为 API 并发、轮询、查询重试，对后续操作生效；已开始操作正常结束、已安排的退避不强行改写。CLI/API 不接受输出目录、覆盖或旧 enqueue/run 下载入口。
+- 凭据仅放 secrets.yaml，Linux 用 0600、文件锁及原子替换；Windows 原生保护仍待补齐，日志/DTO/CLI 不输出密钥。
+- 不引入 Textual、旧 src/ui、固定 ERA5 字段、旧 YAML/JSON 任务导入、暂停/预约/可靠数据断点续传或展示性控制。
 
-## 运行与验证
+## 界面
 
-以下是完整开发检查命令，不是每次修改都要执行的固定清单。按当前改动只做相关功能验证；文档和看板迁移只检查配置、任务结构、链接和差异，不重跑全量测试，不主动启动视觉验证。
+默认 CDS；少于 5 项多选直接卡片，其余非变量枚举支持严格名称/ID 逗号输入；变量仅搜索并从候选选择，常驻标签一行起自动增高，候选 560px。
+时间两行两列，组合输入即展开、等宽、行内箭头，可外部/Esc/按钮关闭；地图固定离线世界视图，区域框/点位随坐标变化，处理日界线和零度。
+AI 极简输入置右栏，其下为手动规模、预览及请求拆分与提交，服务配置在设置。移除本地输出目录、浏览和添加并下载。队列只交付链接，不跟踪外部下载进度。
+队列表格跟随页面宽度，每页 10 条，底部显示当前范围与复制反馈。标题下显示“来源 · 数据集 ID”。行复选框悬停、聚焦或选中时显示，触屏常显，表头全选仅限当前页。顶部更新链接、复制链接操作所选就绪请求，未选择时操作当前页就绪请求。
 
-```bash
-uv sync --extra dev
-uv run pytest
-cd frontend && npm install && npm run build
-```
+## 文档与进度
 
-源码和 wheel 都应支持：
+- doc-1 / .backlog/docs/product/doc-1 - Product.md：当前功能、支持范围、限制和最新证据。
+- doc-3：官方字段调查、显示/编码依据；旧本地输出和 ARCO 规则由 DRAFT-7 取代。
+- DRAFT-7 / TASK-32：已批准的请求监视/链接路线与实施；TASK-9 为真实小请求到链接验收，不再验收下载内容。
+- DRAFT-6 / TASK-30：通用模型与编译；TASK-31：CDS 工作区、手动规模及新提交入口。
+- TASK-29：两个 NCAR 目录和原文件链接；ARCO 本地导出取消。
+- TASK-10/11：关停、租约及迟到恢复；TASK-13：配置保存失败等剩余工程边界。
+- DRAFT-1～5 保留原批准来源和仍有效要求，冲突下载要求注明取代，不冒充修复或重新验收。
+- decision-1 为 CLI + 本地 Web；decision-2 为无 Alembic 的启动建表。
+- doc-2 为历史验证，不能当当前实测；doc/note/cds_smoke_request.yaml 为有效请求附件。
 
-```bash
-ecmwf --help
-ecmwf web
-```
+## 验证与协作
 
-不要重新引入 Textual、`src/ui/`、固定 ERA5 字段假设、旧 JSON 任务迁移、暂停/可靠断点续传或非回环 Web 监听，除非需求明确改变。
+先读当前 AGENTS、产品、相关任务、Git 历史和工作区，保护无关修改。用 uv 管理 Python、npm 管理前端。按改动做相关功能检查和必要构建，不自动跑无关全量测试或主动视觉验收。真实与模拟证据分开；不冒称全部数据集、科学文件内容、真实远端取消或 Windows 原生已验收。
 
-0.5.0 源码统一位于 `src/ecmwf_downloader/`，测试保留在 `tests/test_new/`。旧 `src/api/`、`src/core/`、`src/utils/` 与对应旧测试已按用户确认删除；过期 `dist/` 安装包不保留，需要分发时从当前源码重新构建。
+Backlog 在 WSL 仓库根目录仅用 CLI，先检查 .backlog/config.yml；保留 Git、auto_commit:false、待验收，不重新 init、不用 MCP 或直接编辑 Markdown。基线 Backlog.md 1.55.2，无项目内 CLI 可用 npx --yes --package backlog.md@1.55.2 backlog，缓存后可 offline。
 
-## 数据迁移策略
+新需求先形成 Draft PRD，经用户确认后登记任务，实现前记录计划。验证后最多待验收，不代勾验收、不设 Done。取消旧需求须记录原因，不伪装完成；过时任务可 CLI 归档，删除依用户规则列清单确认。
 
-0.5.0 使用全新数据库，不导入旧 YAML/JSON 任务历史，也不自动删除旧文件；已有下载文件保留在磁盘但不作为历史任务导入。
+启动 Dashboard 先查 Windows/WSL 两侧端口，复用同项目服务，否则选空闲端口，以 backlog browser --port <port> --non-interactive --no-open 启动，核实项目/地址后 open_in_codex，保留其他服务。
 
-旧 `accounts.yaml`、`ai_config.yaml`、`default_config.yaml` 已按用户明确授权清除；当前配置使用 `config/app.yaml` 和 `config/secrets.yaml`，示例与运行锁文件保留。
+无 LAST_RUN/TODO/Roadmap 或迁移快照，不新建重复历史汇总；清理本轮临时脚本及可再生成缓存，保留运行资产、有效要求、验收证据和用户数据。版本、提交、Tag、发布分别要明确授权，CHANGELOG 只在更新版本时修改。本轮未授权提交/版本/发布。
 
-数据库由 SQLAlchemy `create_all` 在启动时初始化缺失表，保留现有表和记录。按用户确认的低频变更范围，项目不提供 Alembic 版本迁移或已有表结构自动升级；后续字段变化须单独确认处理方案，不自动删除或重建数据库。迁移脚本、`alembic.ini` 和 Alembic 依赖不再保留。
-
-## 文档入口与进度依据
-
-- `.backlog/docs/product/doc-1 - Product.md`：当前实现、支持范围及已知限制。
-- `.backlog/config.yml`：项目看板配置；项目名为 `ecmwf-downloader`，Git 集成启用，自动提交关闭。
-- `.backlog/tasks/`：唯一活动任务来源，状态为 `To Do`、`In Progress`、`待验收`、`Done`；外部阻塞写入任务说明和标签。
-- `.backlog/milestones/`：阶段规划和任务归属，不承诺尚未确认的日期或版本号。
-- `.backlog/drafts/draft-1 - PRD-0.5.0_acceptance.md`：0.5.0 收尾验收范围与通过标准。
-- `DRAFT-2`：Windows/Linux CLI 与后台管理台需求，采用 SSH 端口转发，待用户审查后拆分实现任务。
-- `DRAFT-3`：用户已确认的单一队列与自动开始需求；实施由 TASK-15、TASK-17 跟踪。管理台统一为任务队列、添加任务、账号和设置，不保留暂停、全局停止、手动入队与展示性控制。
-- `.backlog/decisions/decision-1 - 0001_local_cli_web.md`：现有架构及迁移边界。
-- `decision-2`：低频变更下采用启动建表并移除 Alembic；具体约束与验证见 `TASK-24`。
-- `.backlog/docs/notes/doc-2 - acceptance_2026-10-07.md`：历史验证证据、真实下载请求与未验证范围，不视为最新实测。
-- `TASK-1`：记忆系统与任务看板迁移，实施说明由 Backlog 维护。
-- `doc/note/cds_smoke_request.yaml`：真实 CDS 小请求验收所用的请求附件。
-
-报告进度前核对 Backlog、相关代码、近期 Git 历史和工作区状态。已有实现、自动测试通过、用户验收通过和真实 CDS 下载通过是不同证据，不能相互替代。所有任务由用户验收，代理最多转为「待验收」，不勾选用户验收项、不代设 Done、不自动归档未验收事项。用户笼统表示“大部分完成”不等于逐项验收。
-
-## Backlog 使用约定
-
-开始工作先检查配置与现有任务，已初始化时不重复运行 `backlog init`，不覆盖配置。任务、草稿、Backlog 文档、决策及里程碑通过 CLI 修改，不直接编辑 `.backlog/` 下的 Markdown；配置列表可按工具要求修改 YAML。
-
-Backlog 的所有操作统一在 WSL 的仓库根目录使用 CLI，不使用 Backlog MCP；执行前核对当前工作目录与 `.backlog/config.yml`。现有 CLI 基线为 Backlog.md 1.55.2；没有项目内 CLI 时可以使用 `npx --yes --package backlog.md@1.55.2 backlog`，已缓存后可改为 `--offline`。
-
-```bash
-backlog config get autoCommit
-backlog task list --plain
-backlog milestone list
-```
-
-`LAST_RUN.md`、`TODO.md` 和 `Roadmap` 均已弃用。已迁入 Backlog 的旧文件、跳转入口、历史快照和重复迁移汇总按用户要求删除，不额外备份；后续只维护 Backlog。收尾清理可再生成的中间文件，保留有效需求、决策、验收证据、发布产物和用户数据。新需求先形成 PRD，经用户确认后登记任务；实现前记录任务计划，做定向验证后交由用户验收。
-
-新增桌面化部分按用户新偏好采用 Electron 包装 Web App，先在 Web 开发并测试；当前项目仍为 CLI + Web，本轮没有引入桌面端或改变架构。提交、版本、Tag 与发布继续分别以用户明确要求为授权；CHANGELOG 只在明确更新版本时修改。
-
-最后更新：2026-10-25。
-
-## Backlog 工作流
-
-- 在仓库根目录通过 CLI 操作，先核对 `.backlog/config.yml`；保留 Git、`auto_commit: false` 和 `待验收` 状态。
-- Drafts 保存完整需求文档，Documents 保存产品说明和专题笔记，Decisions 保存决策；Tasks 与 Milestones 分别管理执行和阶段规划。
-- 需求经用户审查后关联或拆分 Tasks；实现和适用验证后最多转为 `待验收`，验收条件和完成状态由用户决定。
-- Backlog 记录通过 CLI 修改，不直接编辑其 Markdown。
-- 新项目初始化使用 CLI，并指定 `--agent-instructions none` 保留提示词文件。
-- 启动 Dashboard 前检查端口占用；跨 Windows/WSL 时检查两侧。同项目可用服务可复用，否则使用空闲端口及 `--non-interactive`，核实项目和实际地址，保留其他服务进程。
-- 原需求的批准范围、任务编号和验证证据保留；历史测试结果不代表当前工作区已重新通过验证。
-- 论文、研究报告、图片和附件按项目需要保留在原目录。
+最后更新：2026-11-02。

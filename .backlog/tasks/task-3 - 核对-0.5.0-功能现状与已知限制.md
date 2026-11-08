@@ -4,7 +4,7 @@ title: 核对 0.5.0 功能现状与已知限制
 status: Done
 assignee: []
 created_date: '2026-10-23T15:00:00Z'
-updated_date: '2026-10-25T16:01:00Z'
+updated_date: '2026-11-08T09:16:00Z'
 labels:
   - migration
   - historical-evidence
@@ -29,6 +29,6 @@ ordinal: 8000
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 文档区分已有实现、测试证据和真实下载验收
+- [ ] #1 文档区分当前实现、本地与模拟测试证据、真实 CDS 请求及结果链接验证，并注明各自范围
 - [ ] #2 产品限制包含取消边界与未接线控件
 <!-- AC:END -->

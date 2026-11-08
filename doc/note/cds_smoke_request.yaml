@@ -1,3 +1,4 @@
+# 当前用于 DRAFT-7 的提交、监视与结果链接验收，不下载科学数据文件体。
 # 对应 acceptance_2026-10-07.md；area 顺序为 North, West, South, East，单位为 degree。
 # dataset_id: reanalysis-era5-single-levels。时间为 UTC；此文件仅保存 request_payload。
 product_type: [reanalysis]

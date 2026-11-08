@@ -10,8 +10,8 @@ import SettingsPage from './pages/SettingsPage'
 import brandMark from './assets/brand-mark.png'
 
 const navigation = [
-  { to: '/tasks', label: '任务队列', icon: List },
-  { to: '/requests/new', label: '添加任务', icon: Plus },
+  { to: '/tasks', label: '请求队列', icon: List },
+  { to: '/requests/new', label: '提交请求', icon: Plus },
   { to: '/accounts', label: '账号', icon: Users },
   { to: '/settings', label: '设置', icon: Settings },
 ]
@@ -25,7 +25,7 @@ export default function App() {
       void queryClient.invalidateQueries({ queryKey: ['summary'] })
       void queryClient.invalidateQueries({ queryKey: ['accounts'] })
     }
-    const events = ['task.created', 'task.status_changed', 'task.progress', 'task.retry_scheduled', 'task.recovered', 'task.deleted']
+    const events = ['task.created', 'task.status_changed', 'task.query_retry', 'task.resubmitted', 'task.recovered', 'task.deleted']
     events.forEach((event) => source.addEventListener(event, refresh))
     return () => source.close()
   }, [queryClient])

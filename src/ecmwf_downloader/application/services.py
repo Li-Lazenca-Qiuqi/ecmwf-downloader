@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 from pathlib import Path
+import json
+import re
 import threading
 from typing import Any, Optional
 from uuid import uuid4
 
 from ecmwf_downloader.application.request_builder import RequestBuilder
+from ecmwf_downloader.application.request_compiler import compile_request
 from ecmwf_downloader.config import AppSettings
 from ecmwf_downloader.domain.models import AccountData, AccountStatus, SplitStrategy, TaskData, TaskStatus
 from ecmwf_downloader.infrastructure.cds import CDSProvider
@@ -24,30 +27,44 @@ class TaskService:
         self.settings = settings
         self.tasks = tasks
         self.builder = RequestBuilder()
+        self.datasets = None
+
+    def prepare_request(self, dataset_id, request_payload, schema_revision, editor_values, split_strategy):
+        if schema_revision is None:
+            if editor_values is not None:
+                raise ValueError('编辑值需要对应的字段定义版本，请重新获取字段')
+            return request_payload
+        schema = self.datasets.by_revision(dataset_id, schema_revision)
+        if split_strategy.value not in schema['capabilities']['split_strategies']:
+            raise ValueError('当前数据集不支持此拆分方式')
+        values = editor_values if editor_values is not None else request_payload
+        compiled = compile_request(schema, values, wire=editor_values is None).checked()
+        if editor_values is not None and json.dumps(compiled, sort_keys=True) != json.dumps(request_payload, sort_keys=True):
+            raise ValueError('请求参数与当前编辑值不一致，请重新预览')
+        return compiled
 
     def preview(
         self,
         *,
         dataset_id: str,
         request_payload: dict[str, Any],
-        output_dir: Optional[Path] = None,
         split_strategy: SplitStrategy = SplitStrategy.NONE,
-        filename: Optional[str] = None,
+        warnings: Optional[list[str]] = None,
+        schema_revision: Optional[str] = None,
+        editor_values: Optional[dict[str, Any]] = None,
     ) -> list[dict[str, Any]]:
         plans = self.builder.build(
             dataset_id=dataset_id,
-            payload=request_payload,
-            output_dir=output_dir or self.settings.download.output_dir,
+            payload=self.prepare_request(dataset_id, request_payload, schema_revision, editor_values, split_strategy),
             strategy=split_strategy,
-            filename=filename,
+            warnings=warnings,
         )
         return [
             {
                 "index": index,
                 "dataset_id": dataset_id,
                 "request_payload": plan.payload,
-                "filename": plan.filename,
-                "output_path": str(plan.output_path),
+                "label": plan.label,
             }
             for index, plan in enumerate(plans, start=1)
         ]
@@ -57,28 +74,23 @@ class TaskService:
         *,
         dataset_id: str,
         request_payload: dict[str, Any],
-        output_dir: Optional[Path] = None,
         split_strategy: SplitStrategy = SplitStrategy.NONE,
-        filename: Optional[str] = None,
         max_retries: Optional[int] = None,
-        overwrite: Optional[bool] = None,
+        schema_revision: Optional[str] = None,
+        editor_values: Optional[dict[str, Any]] = None,
     ) -> list[TaskData]:
         plans = self.builder.build(
             dataset_id=dataset_id,
-            payload=request_payload,
-            output_dir=output_dir or self.settings.download.output_dir,
+            payload=self.prepare_request(dataset_id, request_payload, schema_revision, editor_values, split_strategy),
             strategy=split_strategy,
-            filename=filename,
         )
         tasks = [
             self.tasks.create(
                 dataset_id=dataset_id,
                 request_payload=plan.payload,
-                filename=plan.filename,
-                output_path=str(plan.output_path),
+                title=plan.label,
                 split_strategy=split_strategy,
-                max_retries=max_retries if max_retries is not None else self.settings.download.max_retries,
-                overwrite=overwrite if overwrite is not None else self.settings.download.overwrite,
+                max_retries=max_retries if max_retries is not None else self.settings.requests.max_retries,
             )
             for plan in plans
         ]
@@ -93,17 +105,26 @@ class TaskService:
     def summary(self):
         return self.tasks.summary()
 
-    def enqueue(self, task_id: str):
-        return self.tasks.enqueue(task_id)
-
-    def enqueue_many(self, task_ids: list[str]):
-        return self.tasks.enqueue_many(task_ids)
-
     def cancel(self, task_id: str):
         return self.tasks.request_cancel(task_id)
 
     def retry(self, task_id: str):
         return self.tasks.retry(task_id)
+
+    def refresh(self, task_id: str):
+        return self.tasks.request_refresh(task_id)
+
+    def attach(self, task_id: str, remote_id: str):
+        if not re.fullmatch(r'[A-Za-z0-9_-]{1,255}', remote_id):
+            raise ValueError('远端请求 ID 格式无效')
+        task = self.tasks.get(task_id)
+        if task is None:
+            raise KeyError('请求不存在')
+        if task.status != TaskStatus.SUBMISSION_UNKNOWN:
+            raise ValueError('仅提交结果不明确的请求可关联远端 ID')
+        account = self.datasets_account(task.account_id)
+        CDSProvider(account).verify_request(remote_id, task.dataset_id, task.request_payload)
+        return self.tasks.attach_remote(task_id, remote_id)
 
     def delete(self, task_id: str):
         return self.tasks.delete(task_id)

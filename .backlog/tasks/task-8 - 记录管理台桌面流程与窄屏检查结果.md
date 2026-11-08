@@ -16,7 +16,7 @@ documentation:
   - .backlog/docs/notes/doc-2 - acceptance_2026-10-07.md
 priority: medium
 type: task
-ordinal: 12000
+ordinal: 13000
 ---
 
 ## Description

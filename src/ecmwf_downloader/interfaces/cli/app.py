@@ -13,13 +13,13 @@ import yaml
 
 from ecmwf_downloader import __version__
 from ecmwf_downloader.application.container import AppContainer
-from ecmwf_downloader.application.worker import DownloadScheduler
+from ecmwf_downloader.application.worker import RequestScheduler
 from ecmwf_downloader.config import load_settings
 from ecmwf_downloader.domain.models import AccountStatus, SplitStrategy, TaskStatus
 from ecmwf_downloader.interfaces.http.app import create_app
 
 app = typer.Typer(help="ECMWF Downloader CLI", invoke_without_command=True)
-task_app = typer.Typer(help="任务管理", no_args_is_help=True)
+task_app = typer.Typer(help="请求队列管理", no_args_is_help=True)
 dataset_app = typer.Typer(help="数据集与 Schema", no_args_is_help=True)
 request_app = typer.Typer(help="请求预览与 AI 建议", no_args_is_help=True)
 account_app = typer.Typer(help="账号池管理", no_args_is_help=True)
@@ -77,7 +77,7 @@ def web(
     ctx: typer.Context,
     host: str = typer.Option("127.0.0.1", help="监听地址；首版建议保持本机回环地址"),
     port: int = typer.Option(8000, min=1, max=65535),
-    no_worker: bool = typer.Option(False, "--no-worker", help="只启动 API，不启动下载调度器"),
+    no_worker: bool = typer.Option(False, "--no-worker", help="只启动 API，不启动请求调度器"),
     reload: bool = typer.Option(False, help="开发模式热重载"),
 ):
     """启动本地 Web 管理台和 FastAPI。"""
@@ -91,7 +91,7 @@ def web(
 def worker(ctx: typer.Context):
     """启动独立队列 Worker，直到收到 Ctrl+C。"""
     container = _ctx_container(ctx)
-    scheduler = DownloadScheduler(container)
+    scheduler = RequestScheduler(container)
     if not scheduler.start():
         raise typer.Exit(code=3)
     typer.echo("Worker 已启动，按 Ctrl+C 停止")
@@ -103,15 +103,23 @@ def worker(ctx: typer.Context):
 
 
 @dataset_app.command("list")
-def dataset_list(ctx: typer.Context, as_json: bool = typer.Option(False, "--json")):
-    items = _ctx_container(ctx).datasets.list()
+def dataset_list(ctx: typer.Context, as_json: bool = typer.Option(False, "--json"),
+                 search: str = typer.Option('', '--search'), refresh: bool = typer.Option(False, '--refresh'),
+                 source: str = typer.Option('cds', '--source', help='cds、ncar 或 gdex')):
+    result = _ctx_container(ctx).datasets.list(search, refresh=refresh, source=source)
+    if result['error']:
+        typer.echo(result['error'], err=True)
+    items = result['items']
     _json(items) if as_json else _rows(items, ["id", "title", "source"])
+    if result['source'] == 'error':
+        raise typer.Exit(1)
 
 
 @dataset_app.command("schema")
-def dataset_schema(ctx: typer.Context, dataset_id: str, as_json: bool = typer.Option(False, "--json")):
+def dataset_schema(ctx: typer.Context, dataset_id: str, as_json: bool = typer.Option(False, "--json"),
+                   prefix: str = typer.Option('e5.oper.an.sfc/202401/', '--prefix', help='NCAR 产品与年月目录')):
     container = _ctx_container(ctx)
-    schema = container.datasets.schema(dataset_id, container.accounts.next_available())
+    schema = container.datasets.schema(dataset_id, container.accounts.next_available(), prefix=prefix)
     _json(schema) if as_json else _json(schema)
 
 
@@ -142,11 +150,39 @@ def request_preview(
     dataset_id: str = typer.Option(..., "--dataset"),
     request_file: Optional[Path] = typer.Option(None, "--request-file"),
     set_values: list[str] = typer.Option([], "--set"),
-    output_dir: Optional[Path] = typer.Option(None, "--output-dir"),
     split: SplitStrategy = typer.Option(SplitStrategy.NONE, "--split"),
+    prefix: str = typer.Option('e5.oper.an.sfc/202401/', '--prefix'),
+    schema_check: bool = typer.Option(False, "--schema-check", help="读取字段并以通用编译器校验"),
 ):
     container = _ctx_container(ctx)
-    _json(container.tasks.preview(dataset_id=dataset_id, request_payload=_load_payload(request_file, set_values), output_dir=output_dir, split_strategy=split))
+    revision = None
+    if schema_check:
+        schema = container.datasets.schema(dataset_id, container.accounts.next_available(), prefix=prefix)
+        if schema["source"] == "error": raise typer.BadParameter(schema["error"])
+        revision = schema["revision"]
+    warnings: list[str] = []
+    items = container.tasks.preview(dataset_id=dataset_id, request_payload=_load_payload(request_file, set_values), split_strategy=split, warnings=warnings, schema_revision=revision)
+    for warning in warnings:
+        typer.echo(warning, err=True)
+    _json(items)
+
+
+@request_app.command("compile")
+def request_compile(
+    ctx: typer.Context,
+    dataset_id: str = typer.Option(..., "--dataset"),
+    request_file: Optional[Path] = typer.Option(None, "--request-file"),
+    set_values: list[str] = typer.Option([], "--set"),
+    prefix: str = typer.Option('e5.oper.an.sfc/202401/', '--prefix'),
+):
+    """读取真实字段，将界面值编译为经过校验的 API 请求。"""
+    from ecmwf_downloader.application.request_compiler import compile_request
+    container = _ctx_container(ctx)
+    schema = container.datasets.schema(dataset_id, container.accounts.next_available(), prefix=prefix)
+    if schema['source'] == 'error':
+        raise typer.BadParameter(schema['error'])
+    payload = compile_request(schema, _load_payload(request_file, set_values)).checked()
+    _json({'dataset_id': dataset_id, 'request_payload': payload, 'schema_revision': schema['revision']})
 
 
 @request_app.command("suggest")
@@ -166,26 +202,27 @@ def task_create(
     dataset_id: str = typer.Option(..., "--dataset"),
     request_file: Optional[Path] = typer.Option(None, "--request-file"),
     set_values: list[str] = typer.Option([], "--set"),
-    output_dir: Optional[Path] = typer.Option(None, "--output-dir"),
     split: SplitStrategy = typer.Option(SplitStrategy.NONE, "--split"),
-    filename: Optional[str] = typer.Option(None),
-    enqueue: bool = typer.Option(False, "--enqueue", hidden=True),
-    overwrite: Optional[bool] = typer.Option(None, "--overwrite/--no-overwrite"),
     as_json: bool = typer.Option(False, "--json"),
+    prefix: str = typer.Option('e5.oper.an.sfc/202401/', '--prefix'),
+    schema_check: bool = typer.Option(False, "--schema-check", help="读取字段并以通用编译器校验"),
 ):
     container = _ctx_container(ctx)
+    revision = None
+    if schema_check:
+        schema = container.datasets.schema(dataset_id, container.accounts.next_available(), prefix=prefix)
+        if schema["source"] == "error": raise typer.BadParameter(schema["error"])
+        revision = schema["revision"]
     tasks = container.tasks.create(
         dataset_id=dataset_id,
+        schema_revision=revision,
         request_payload=_load_payload(request_file, set_values),
-        output_dir=output_dir,
         split_strategy=split,
-        filename=filename,
-        overwrite=overwrite,
     )
     values = [task.model_dump(mode="json") for task in tasks]
-    _json(values) if as_json else _rows(values, ["id", "dataset_id", "status", "filename"])
+    _json(values) if as_json else _rows(values, ["id", "dataset_id", "status", "title"])
     if not as_json:
-        typer.echo("已加入下载队列；请保持 ecmwf worker 或带调度器的 ecmwf web 在后台运行。")
+        typer.echo("已加入请求队列；请保持 ecmwf worker 或带调度器的 ecmwf web 在后台运行。")
 
 
 @task_app.command("list")
@@ -201,7 +238,7 @@ def task_list(
     if as_json:
         _json({"items": values, "total": total})
     else:
-        _rows(values, ["id", "dataset_id", "status", "progress", "filename"])
+        _rows(values, ["id", "dataset_id", "status", "remote_request_id"])
         typer.echo(f"共 {total} 个任务")
 
 
@@ -211,11 +248,6 @@ def task_show(ctx: typer.Context, task_id: str, as_json: bool = typer.Option(Fal
     if task is None:
         raise typer.Exit(code=4)
     _json(task.model_dump(mode="json"))
-
-
-@task_app.command("enqueue", hidden=True)
-def task_enqueue(ctx: typer.Context, task_id: str):
-    typer.echo(_ctx_container(ctx).tasks.enqueue(task_id).id)
 
 
 @task_app.command("cancel")
@@ -235,35 +267,6 @@ def task_delete(ctx: typer.Context, task_id: str):
     typer.echo("已删除")
 
 
-@task_app.command("run", hidden=True)
-def task_run(ctx: typer.Context, task_id: str, wait: bool = typer.Option(False, "--wait")):
-    container = _ctx_container(ctx)
-    task = container.tasks.get(task_id)
-    if task is None:
-        raise typer.Exit(code=4)
-    if task.status == TaskStatus.PENDING:
-        container.tasks.enqueue(task_id)
-    scheduler = DownloadScheduler(container)
-    owns_scheduler = scheduler.start()
-    if not wait:
-        typer.echo("已入队")
-        if owns_scheduler:
-            scheduler.stop()
-        return
-    try:
-        while True:
-            task = container.tasks.get(task_id)
-            if task is None:
-                raise typer.Exit(code=4)
-            if task.status in {TaskStatus.COMPLETED, TaskStatus.FAILED, TaskStatus.CANCELLED}:
-                typer.echo(task.status.value)
-                raise typer.Exit(code=0 if task.status == TaskStatus.COMPLETED else 2)
-            time.sleep(0.5)
-    finally:
-        if owns_scheduler:
-            scheduler.stop()
-
-
 @task_app.command("watch")
 def task_watch(
     ctx: typer.Context,
@@ -274,23 +277,59 @@ def task_watch(
     """持续观察任务状态，直到任务进入终态。"""
     container = _ctx_container(ctx)
     previous: tuple[Any, ...] | None = None
-    terminal = {TaskStatus.COMPLETED, TaskStatus.FAILED, TaskStatus.CANCELLED}
+    terminal = {TaskStatus.COMPLETED, TaskStatus.FAILED, TaskStatus.CANCELLED, TaskStatus.EXPIRED, TaskStatus.SUBMISSION_UNKNOWN}
     while True:
         task = container.tasks.get(task_id)
         if task is None:
             raise typer.Exit(code=4)
-        snapshot = (task.status, task.progress, task.downloaded_bytes, task.error_message)
+        snapshot = (task.status, task.remote_status, task.checked_at, task.error_message)
         if snapshot != previous:
             value = task.model_dump(mode="json")
-            _json(value) if as_json else typer.echo(
-                f"{task.id}  {task.status.value}  "
-                f"{'' if task.progress is None else f'{task.progress:.1f}%'}"
-            )
+            _json(value) if as_json else typer.echo(f"{task.id}  {task.status.value}  {task.remote_request_id or ''}")
+            if not as_json and task.status == TaskStatus.COMPLETED:
+                for asset in task.results:
+                    typer.echo(str(asset.url))
             previous = snapshot
         if task.status in terminal:
             raise typer.Exit(code=0 if task.status == TaskStatus.COMPLETED else 2)
         time.sleep(interval)
 
+
+@task_app.command("refresh")
+def task_refresh(ctx: typer.Context, task_id: str):
+    typer.echo(_ctx_container(ctx).tasks.refresh(task_id).status.value)
+
+@task_app.command("attach")
+def task_attach(ctx: typer.Context, task_id: str, remote_id: str):
+    typer.echo(_ctx_container(ctx).tasks.attach(task_id, remote_id).status.value)
+
+@task_app.command("links")
+def task_links(ctx: typer.Context, task_id: Optional[str] = typer.Argument(None),
+               as_json: bool = typer.Option(False, "--json")):
+    container = _ctx_container(ctx)
+    if task_id:
+        task = container.tasks.get(task_id)
+        if task is None:
+            raise typer.Exit(code=4)
+        if task.status != TaskStatus.COMPLETED:
+            typer.echo("结果链接尚未就绪", err=True)
+            raise typer.Exit(code=2)
+        tasks = [task]
+    else:
+        tasks = []
+        offset = 0
+        while True:
+            page, total = container.tasks.list(status=TaskStatus.COMPLETED, limit=500, offset=offset)
+            tasks.extend(page)
+            offset += len(page)
+            if offset >= total:
+                break
+    assets = [{"task_id": task.id, **asset.model_dump(mode="json")} for task in tasks for asset in task.results]
+    if as_json:
+        _json(assets)
+    else:
+        for asset in assets:
+            typer.echo(asset["url"])
 
 @account_app.command("list")
 def account_list(ctx: typer.Context, as_json: bool = typer.Option(False, "--json")):
@@ -390,12 +429,10 @@ def config_show(ctx: typer.Context, as_json: bool = typer.Option(False, "--json"
 def config_set(ctx: typer.Context, key: str, value: str):
     container = _ctx_container(ctx)
     allowed = {
-        "download.output_dir",
-        "download.max_workers",
-        "download.max_retries",
-        "download.retry_delays",
-        "download.poll_interval",
-        "download.overwrite",
+        "requests.max_workers",
+        "requests.max_retries",
+        "requests.retry_delays",
+        "requests.poll_interval",
         "ai.enabled",
         "ai.base_url",
         "ai.model",

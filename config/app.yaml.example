@@ -2,13 +2,11 @@
 database_path: data/ecmwf.sqlite3
 config_dir: config
 
-download:
-  output_dir: data/downloads
+requests:
   max_workers: 4
   max_retries: 3
   retry_delays: [5, 15, 60]
-  poll_interval: 0.5
-  overwrite: false
+  poll_interval: 5
 
 ai:
   enabled: false

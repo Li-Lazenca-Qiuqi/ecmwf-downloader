@@ -1,185 +1,239 @@
-from pathlib import Path
-import threading
-import time
-
+import json
+from datetime import datetime, timedelta, timezone
 import pytest
 from fastapi.testclient import TestClient
 from typer.testing import CliRunner
-
 from ecmwf_downloader.application.container import AppContainer
-from ecmwf_downloader.application.worker import DownloadEngine, DownloadScheduler
-from ecmwf_downloader.config import AppSettings, DownloadSettings
-from ecmwf_downloader.domain.models import TaskStatus
-from ecmwf_downloader.infrastructure.cds import CDSProvider
+from ecmwf_downloader.application.worker import RequestEngine
+from ecmwf_downloader.config import AppSettings, RequestSettings
+from ecmwf_downloader.domain.models import SplitStrategy, TaskStatus
+from ecmwf_downloader.infrastructure.cds import CDSProvider, ProviderError, SubmissionUncertain
 from ecmwf_downloader.infrastructure.db import TaskRow
-from ecmwf_downloader.interfaces.cli.app import app
 from ecmwf_downloader.interfaces.http.app import create_app
+from ecmwf_downloader.interfaces.cli.app import app
 
+URL = 'https://files.example.test/result.nc?signature=private-link'
+ASSETS = [{'url': URL, 'filename': 'result.nc', 'size': 0, 'content_type': 'application/x-netcdf'}]
 
 @pytest.fixture
 def container(tmp_path):
-    value = AppContainer(AppSettings(
-        database_path=tmp_path / 'db.sqlite3', config_dir=tmp_path / 'config',
-        download=DownloadSettings(output_dir=tmp_path / 'downloads', max_workers=1),
-    ))
+    value = AppContainer(AppSettings(database_path=tmp_path/'db', config_dir=tmp_path/'config',
+                                    requests=RequestSettings(max_retries=1, retry_delays=[0])))
+    value.accounts.add(email='test@example.invalid', key='private-key', url='https://example.invalid')
     yield value
     value.database.engine.dispose()
 
+def claim(c):
+    account = c.accounts.next_available()
+    return c.tasks_repository.claim_next('test-worker', account_id=account['id'] if account else None)
 
-def test_preview_does_not_create_and_split_tasks_are_queued(container):
-    request = dict(dataset_id='test', request_payload={'year': [2023, 2024]}, split_strategy='year')
-    from ecmwf_downloader.domain.models import SplitStrategy
-    request['split_strategy'] = SplitStrategy.YEAR
-    assert len(container.tasks.preview(**request)) == 2
-    assert container.tasks.list()[1] == 0
-    tasks = container.tasks.create(**request)
-    assert len(tasks) == 2 and all(task.status == TaskStatus.QUEUED for task in tasks)
-    assert all(event['payload']['status'] == 'queued' for event in container.tasks_repository.events_after())
+def due(c, task_id):
+    with c.database.session(immediate=True) as session:
+        session.get(TaskRow, task_id).next_retry_at = None
 
+def submitted(c, monkeypatch):
+    task = c.tasks.create(dataset_id='test', request_payload={'year':['2024']})[0]
+    assert claim(c).id == task.id
+    monkeypatch.setattr(CDSProvider, 'submit', lambda *args: 'remote-1')
+    RequestEngine(c).execute(task.id)
+    assert c.tasks.get(task.id).remote_request_id == 'remote-1'
+    due(c, task.id)
+    return task
 
-def test_api_rejects_deferred_creation_and_preserves_old_true_flag(container):
-    with TestClient(create_app(container, with_worker=False)) as client:
-        request = {'dataset_id': 'test', 'request_payload': {}}
-        assert client.post('/api/v1/tasks', json={**request, 'enqueue': False}).status_code == 422
-        assert container.tasks.list()[1] == 0
-        assert client.post('/api/v1/tasks', json={**request, 'enqueue': True}).json()['items'][0]['status'] == 'queued'
-        summary = client.get('/api/v1/summary').json()
-        assert summary['available_accounts'] == 0
-        assert summary['scheduler_running'] is False
-        assert summary['max_workers'] is None
-
-
-def test_cli_creates_queued_without_enqueue_option(container):
-    import json
-    runner = CliRunner()
-    args = ['--config-dir', str(container.settings.config_dir), '--database', str(container.settings.database_path)]
-    result = runner.invoke(app, [*args, 'task', 'create', '--dataset', 'test', '--output-dir', str(container.settings.download.output_dir), '--json'])
-    assert result.exit_code == 0, result.output
-    assert json.loads(result.output)[0]['status'] == 'queued'
-    help_result = runner.invoke(app, [*args, 'task', 'create', '--help'], color=False)
-    assert '--enqueue' not in help_result.output
-
-
-def test_cancelled_waiting_task_is_not_claimed_or_retried(container):
+def test_end_to_end_request_links_and_events_do_not_contain_file_bytes(container, monkeypatch):
+    calls = []
+    def submit(*args):
+        calls.append(1)
+        return 'remote-1'
+    monkeypatch.setattr(CDSProvider, 'submit', submit)
     task = container.tasks.create(dataset_id='test', request_payload={})[0]
-    assert container.tasks.cancel(task.id).status == TaskStatus.CANCELLED
-    assert container.tasks.cancel(task.id).status == TaskStatus.CANCELLED
-    assert container.tasks_repository.claim_next('worker') is None
-    assert container.tasks_repository.finish_failure(task.id, 'late error').status == TaskStatus.CANCELLED
-    assert container.tasks.get(task.id).retry_count == 0
+    assert claim(container).status == TaskStatus.SUBMITTING
+    engine = RequestEngine(container)
+    engine.execute(task.id)
+    for state in ['running','successful']:
+        due(container, task.id)
+        assert claim(container).id == task.id
+        monkeypatch.setattr(CDSProvider, 'inspect', lambda *args: (state, ASSETS if state=='successful' else []))
+        engine.execute(task.id)
+    result = container.tasks.get(task.id)
+    assert result.status == TaskStatus.COMPLETED and result.results[0].size == 0
+    assert result.remote_request_id == 'remote-1' and len(calls)==1
+    assert 'output_path' not in result.model_dump() and 'downloaded_bytes' not in result.model_dump()
+    assert 'private-link' not in json.dumps(container.tasks_repository.events_after())
+    assert container.accounts.list()[0].used_count == 1
 
-
-def test_cancel_during_retry_wait_prevents_claim(container):
-    task = container.tasks.create(dataset_id='test', request_payload={})[0]
-    container.tasks_repository.claim_next('worker')
-    assert container.tasks_repository.finish_failure(task.id, 'temporary').status == TaskStatus.RETRY_WAIT
-    assert container.tasks.cancel(task.id).status == TaskStatus.CANCELLED
-    assert container.tasks_repository.claim_next('worker') is None
-
-
-@pytest.mark.parametrize('fails', [False, True])
-def test_running_cancel_does_not_publish_or_count_as_account_failure(container, monkeypatch, fails):
-    account = container.accounts.add(email='test@example.invalid', key='fake-key', url='https://example.invalid')
-    task = container.tasks.create(dataset_id='test', request_payload={})[0]
-    container.tasks_repository.claim_next('worker')
-    def download(self, *, target, **kwargs):
-        target.write_bytes(b'partial')
-        container.tasks.cancel(task.id)
-        if fails:
-            raise RuntimeError('transport ended after cancellation')
-        return target
-    monkeypatch.setattr(CDSProvider, 'download', download)
-    DownloadEngine(container).execute(task.id, container.secrets.get_account(account.id))
-    finished = container.tasks.get(task.id)
-    assert finished.status == TaskStatus.CANCELLED and finished.retry_count == 0
-    assert not Path(task.output_path).exists()
-    assert not Path(f'{task.output_path}.part').exists()
-    assert container.accounts.list()[0].fail_count == 0
-
-
-def test_cancel_wins_before_final_publication(container, monkeypatch):
-    account = container.accounts.add(email='test@example.invalid', key='fake-key', url='https://example.invalid')
-    task = container.tasks.create(dataset_id='test', request_payload={})[0]
-    container.tasks_repository.claim_next('worker')
-    def download(self, *, target, **kwargs):
-        target.write_bytes(b'data')
-        return target
-    original = container.tasks_repository.finish_completed
-    def finish(task_id, publish=None):
-        container.tasks.cancel(task_id)
-        return original(task_id, publish=publish)
-    monkeypatch.setattr(CDSProvider, 'download', download)
-    monkeypatch.setattr(container.tasks_repository, 'finish_completed', finish)
-    DownloadEngine(container).execute(task.id, container.secrets.get_account(account.id))
-    assert container.tasks.get(task.id).status == TaskStatus.CANCELLED
-    assert not Path(task.output_path).exists()
-    assert not Path(f'{task.output_path}.part').exists()
-
-
-def test_single_queue_respects_capacity_and_cancels_queued_task(container, monkeypatch):
-    container.accounts.add(email='test@example.invalid', key='fake-key', url='https://example.invalid')
-    entered = threading.Event()
-    release = threading.Event()
-    called = []
-    def download(self, *, target, **kwargs):
-        called.append(target.name)
-        entered.set()
-        assert release.wait(5)
-        target.write_bytes(b'data')
-        return target
-    monkeypatch.setattr(CDSProvider, 'download', download)
-    first = container.tasks.create(dataset_id='test', request_payload={}, filename='first.nc')[0]
-    second = container.tasks.create(dataset_id='test', request_payload={}, filename='second.nc')[0]
-    scheduler = DownloadScheduler(container, poll_interval=0.01)
-    assert scheduler.start()
-    try:
-        assert entered.wait(5)
-        assert container.tasks.get(first.id).status == TaskStatus.RUNNING
-        assert container.tasks.get(second.id).status == TaskStatus.QUEUED
-        container.tasks.cancel(second.id)
-        release.set()
-        deadline = time.monotonic() + 5
-        while scheduler.active_count and time.monotonic() < deadline:
-            time.sleep(0.01)
-        assert len(called) == 1
-        assert container.tasks.get(first.id).status == TaskStatus.COMPLETED
-        assert container.tasks.get(second.id).status == TaskStatus.CANCELLED
-    finally:
-        release.set()
-        scheduler.stop()
-
-
-def test_existing_pending_is_not_automatically_started(container):
-    task = container.tasks.create(dataset_id='test', request_payload={})[0]
-    with container.database.session() as session:
-        session.get(TaskRow, task.id).status = TaskStatus.PENDING.value
-    reopened = AppContainer(container.settings)
-    try:
-        assert reopened.tasks.get(task.id).status == TaskStatus.PENDING
-        assert reopened.tasks_repository.claim_next('worker') is None
-        assert reopened.tasks.enqueue(task.id).status == TaskStatus.QUEUED
-    finally:
-        reopened.database.engine.dispose()
-
-
-def test_cancel_after_claim_before_worker_starts_finishes_cancelled(container, monkeypatch):
-    task = container.tasks.create(dataset_id='test', request_payload={})[0]
-    container.tasks_repository.claim_next('worker')
-    container.tasks.cancel(task.id)
-    def unexpected_download(*args, **kwargs):
-        pytest.fail('已取消的任务不应进入下载适配器')
-    monkeypatch.setattr(CDSProvider, 'download', unexpected_download)
-    DownloadEngine(container).execute(task.id, {'id': 'unused', 'key': 'fake'})
-    assert container.tasks.get(task.id).status == TaskStatus.CANCELLED
-
-
-def test_existing_target_fails_without_overwrite_or_retry(container):
-    task = container.tasks.create(dataset_id='test', request_payload={})[0]
-    target = Path(task.output_path)
-    target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_bytes(b'existing')
-    container.tasks_repository.claim_next('worker')
-    DownloadEngine(container).execute(task.id, {'id': 'unused', 'key': 'fake'})
+def test_poll_errors_retry_existing_job_never_resubmit(container, monkeypatch):
+    task = submitted(container, monkeypatch)
+    monkeypatch.setattr(CDSProvider, 'submit', lambda *args: pytest.fail('重复提交'))
+    def broken(*args): raise ProviderError('查询失败')
+    monkeypatch.setattr(CDSProvider, 'inspect', broken)
+    engine = RequestEngine(container)
+    for _ in range(2):
+        assert claim(container).id == task.id
+        engine.execute(task.id)
     assert container.tasks.get(task.id).status == TaskStatus.FAILED
-    assert container.tasks.get(task.id).retry_count == 0
-    assert target.read_bytes() == b'existing'
+    resumed = container.tasks.retry(task.id)
+    assert resumed.remote_request_id == 'remote-1' and resumed.status == TaskStatus.ACCEPTED
+    assert claim(container).id == task.id
+    monkeypatch.setattr(CDSProvider, 'inspect', lambda *args: ('successful', ASSETS))
+    engine.execute(task.id)
+    assert container.tasks.get(task.id).status == TaskStatus.COMPLETED
+
+def test_uncertain_submission_not_retried_and_requires_matching_remote(container, monkeypatch):
+    def uncertain(*args): raise SubmissionUncertain('待核实')
+    monkeypatch.setattr(CDSProvider, 'submit', uncertain)
+    task = container.tasks.create(dataset_id='test', request_payload={})[0]
+    claim(container)
+    RequestEngine(container).execute(task.id)
+    assert container.tasks.get(task.id).status == TaskStatus.SUBMISSION_UNKNOWN
+    assert claim(container) is None
+    with pytest.raises(ValueError): container.tasks.retry(task.id)
+    monkeypatch.setattr(CDSProvider, 'verify_request', lambda *args: None)
+    attached = container.tasks.attach(task.id, 'known-remote')
+    assert attached.remote_request_id == 'known-remote' and attached.status == TaskStatus.ACCEPTED
+    with pytest.raises(ValueError): container.tasks.attach(task.id, '../bad')
+
+def test_cancel_before_submit_thread_starts_does_not_contact_remote(container, monkeypatch):
+    task = container.tasks.create(dataset_id='test', request_payload={})[0]
+    claim(container)
+    container.tasks.cancel(task.id)
+    monkeypatch.setattr(CDSProvider, 'submit', lambda *args: pytest.fail('取消后提交'))
+    RequestEngine(container).execute(task.id)
+    assert container.tasks.get(task.id).status == TaskStatus.CANCELLED
+
+def test_cancel_during_submission_preserves_remote_id_then_confirms_cancel(container, monkeypatch):
+    task = container.tasks.create(dataset_id='test', request_payload={})[0]
+    claim(container)
+    def submit(*args):
+        container.tasks.cancel(task.id)
+        return 'remote-cancel'
+    monkeypatch.setattr(CDSProvider, 'submit', submit)
+    engine = RequestEngine(container)
+    engine.execute(task.id)
+    current = container.tasks.get(task.id)
+    assert current.status == TaskStatus.CANCELLING and current.remote_request_id == 'remote-cancel'
+    called = []
+    monkeypatch.setattr(CDSProvider, 'cancel', lambda _, rid: called.append(rid))
+    claim(container)
+    engine.execute(task.id)
+    assert called == ['remote-cancel'] and container.tasks.get(task.id).status == TaskStatus.CANCELLED
+
+def test_cancel_wins_over_ready_result(container, monkeypatch):
+    task = submitted(container, monkeypatch)
+    claim(container)
+    container.tasks.cancel(task.id)
+    result = container.tasks_repository.apply_remote(task.id, 'successful', ASSETS, 1, remote_id='remote-1')
+    assert result.status == TaskStatus.CANCELLING and result.results == []
+    assert container.accounts.list()[0].used_count == 0
+
+def test_refresh_expiry_and_explicit_resubmission(container, monkeypatch):
+    task = submitted(container, monkeypatch)
+    claim(container)
+    container.tasks_repository.apply_remote(task.id,'successful',ASSETS,1,remote_id='remote-1')
+    assert container.tasks.refresh(task.id).status == TaskStatus.REFRESHING
+    claim(container)
+    monkeypatch.setattr(CDSProvider,'inspect',lambda *args:('expired',[]))
+    RequestEngine(container).execute(task.id)
+    expired = container.tasks.get(task.id)
+    assert expired.status == TaskStatus.EXPIRED and expired.results == []
+    assert claim(container) is None
+    again = container.tasks.retry(task.id)
+    assert again.status == TaskStatus.QUEUED and again.remote_request_id is None
+
+def test_multiple_results_refresh_does_not_double_count_account(container, monkeypatch):
+    task = submitted(container, monkeypatch)
+    assets = [*ASSETS, {'url':'https://files.example.test/second.nc', 'size':42}]
+    claim(container)
+    container.tasks_repository.apply_remote(task.id,'successful',assets,1,remote_id='remote-1')
+    container.tasks.refresh(task.id)
+    claim(container)
+    container.tasks_repository.apply_remote(task.id,'successful',assets,1,remote_id='remote-1')
+    assert len(container.tasks.get(task.id).results)==2 and container.accounts.list()[0].used_count==1
+    with TestClient(create_app(container, with_worker=False)) as client:
+        assert len(client.get('/api/v1/tasks/'+task.id+'/links').json()['items'])==2
+
+def test_empty_result_not_ready_and_bound_account_never_rotates(container, monkeypatch):
+    task = submitted(container, monkeypatch)
+    with pytest.raises(ValueError):
+        container.tasks_repository.apply_remote(task.id,'successful',[],1,remote_id='remote-1')
+    original = container.tasks.get(task.id).account_id
+    container.accounts.add(email='another@example.invalid',key='other',url='https://other.invalid')
+    container.accounts.delete(original)
+    claim(container)
+    monkeypatch.setattr(CDSProvider,'inspect',lambda *args:pytest.fail('切换到其他账号'))
+    RequestEngine(container).execute(task.id)
+    current = container.tasks.get(task.id)
+    assert current.account_id==original and current.error_message
+
+def test_api_rejects_local_download_options_and_exposes_request_settings(container):
+    with TestClient(create_app(container, with_worker=False)) as client:
+        for option in ['output_dir','filename','overwrite','enqueue']:
+            assert client.post('/api/v1/tasks',json={'dataset_id':'test','request_payload':{},option:True}).status_code==422
+        assert client.get('/api/v1/directories').status_code==404
+        settings = client.get('/api/v1/settings').json()
+        assert 'requests' in settings and 'download' not in settings
+        assert client.patch('/api/v1/settings',json={'values':{'requests':{'max_workers':0}}}).status_code==422
+        assert container.settings.requests.max_workers==4
+
+def test_cli_no_download_flags_and_outputs_links(container, monkeypatch):
+    runner = CliRunner()
+    options = ['--config-dir',str(container.settings.config_dir),'--database',str(container.settings.database_path)]
+    for command in [['task','create'],['request','preview']]:
+        help = runner.invoke(app,[*options,*command,'--help'])
+        assert help.exit_code==0
+        assert '--output-dir' not in help.output and '--overwrite' not in help.output
+    task = submitted(container,monkeypatch)
+    claim(container)
+    container.tasks_repository.apply_remote(task.id,'successful',ASSETS,1,remote_id='remote-1')
+    result = runner.invoke(app,[*options,'task','links',task.id])
+    assert result.exit_code==0 and URL in result.output
+    assert 'private-key' not in result.output
+
+@pytest.mark.parametrize("values", [
+    {"max_workers":0}, {"max_workers":True}, {"poll_interval":0}, {"poll_interval":True},
+    {"retry_delays":[]}, {"retry_delays":[-1]}, {"retry_delays":[float("nan")]},
+])
+def test_invalid_request_settings_are_rejected_before_persistence(container,values):
+    with pytest.raises(ValueError):
+        container.update_settings({"requests":values})
+    assert container.settings.requests.max_workers==4
+    path=container.settings.config_dir/"app.yaml"
+    assert not path.exists()
+
+def test_rejected_submission_counts_once_but_query_errors_do_not(container,monkeypatch):
+    from ecmwf_downloader.infrastructure.cds import SubmissionRejected
+    def rejected(*args): raise SubmissionRejected("请求被拒绝")
+    monkeypatch.setattr(CDSProvider,"submit",rejected)
+    task=container.tasks.create(dataset_id="test",request_payload={})[0]
+    claim(container)
+    RequestEngine(container).execute(task.id)
+    assert container.accounts.list()[0].fail_count==1
+    assert container.tasks.get(task.id).remote_status=="rejected"
+    container.tasks_repository.submission_failed(task.id,"请求被拒绝",uncertain=False,rejected=True)
+    assert container.accounts.list()[0].fail_count==1
+
+def test_monitor_failure_must_not_orphan_remote_job_when_deleting(container,monkeypatch):
+    task=submitted(container,monkeypatch)
+    container.tasks_repository.query_failed(task.id,"网络失败")
+    container.tasks_repository.query_failed(task.id,"网络失败")
+    assert container.accounts.list()[0].fail_count==0
+    with pytest.raises(ValueError,match="仍可能运行"):
+        container.tasks.delete(task.id)
+    assert container.tasks.cancel(task.id).status==TaskStatus.CANCELLING
+
+def test_post_ack_database_retry_never_posts_a_second_request(container,monkeypatch):
+    calls=[]
+    monkeypatch.setattr(CDSProvider,"submit",lambda *args:(calls.append(1) or "known-after-ack"))
+    original=container.tasks_repository.record_submission
+    writes=[]
+    def persist(*args):
+        writes.append(1)
+        if len(writes)==1:
+            raise RuntimeError("模拟首次持久化失败")
+        return original(*args)
+    monkeypatch.setattr(container.tasks_repository,"record_submission",persist)
+    task=container.tasks.create(dataset_id="test",request_payload={})[0]
+    claim(container)
+    RequestEngine(container).execute(task.id)
+    assert len(calls)==1 and len(writes)==2
+    assert container.tasks.get(task.id).remote_request_id=="known-after-ack"

@@ -1,234 +1,152 @@
-"""Process-independent scheduler and CDS download worker."""
-
+"""单一请求队列：提交、轮询和交付结果元数据，不传输文件。"""
 from __future__ import annotations
-
 import logging
-import os
 import threading
-import time
-from concurrent.futures import Future, ThreadPoolExecutor
-from pathlib import Path
-from typing import Optional
+from concurrent.futures import ThreadPoolExecutor, wait
 from uuid import uuid4
-
 from ecmwf_downloader.application.container import AppContainer
 from ecmwf_downloader.domain.models import TaskStatus
-from ecmwf_downloader.infrastructure.cds import CDSProvider, DownloadCancelled, ProviderError
+from ecmwf_downloader.infrastructure.cds import CDSProvider, ProviderError, SubmissionRejected, SubmissionUncertain
+from ecmwf_downloader.infrastructure.mirrors import FILE_MIRROR_IDS, MirrorProvider
 
 logger = logging.getLogger(__name__)
 
-
-class DownloadEngine:
-    def __init__(self, container: AppContainer):
+class RequestEngine:
+    def __init__(self, container):
         self.container = container
 
-    def execute(self, task_id: str, account: dict) -> None:
-        task = self.container.tasks.get(task_id)
-        if task is not None and task.status == TaskStatus.CANCELLING:
-            self.container.tasks_repository.finish_failure(task_id, "任务已取消")
+    def execute(self, task_id):
+        tasks = self.container.tasks_repository
+        task = tasks.get(task_id)
+        if task is None:
             return
-        if task is None or task.status != TaskStatus.RUNNING:
-            return
-        target = Path(task.output_path)
-        part = Path(f"{target}.part")
-        if target.exists() and not self._overwrite_allowed(task):
-            self.container.tasks_repository.finish_failure(
-                task_id,
-                f"目标文件已存在: {target}",
-                retryable=False,
-            )
-            return
-
-        monitor_stop = threading.Event()
-        monitor = threading.Thread(
-            target=self._monitor_file,
-            args=(task_id, part, monitor_stop),
-            name=f"progress-{task_id[:8]}",
-            daemon=True,
-        )
+        submission_id = None
+        mirror = task.dataset_id in FILE_MIRROR_IDS
         try:
-            part.parent.mkdir(parents=True, exist_ok=True)
-            if part.exists():
-                part.unlink()
-            monitor.start()
-            provider = CDSProvider(account)
-            provider.download(
-                dataset_id=task.dataset_id,
-                request_payload=task.request_payload,
-                target=part,
-                cancel_check=lambda: self._cancel_requested(task_id),
-            )
-            monitor_stop.set()
-            monitor.join(timeout=2)
-            if self._cancel_requested(task_id):
-                if part.exists():
-                    part.unlink()
-                current = self.container.tasks.get(task_id)
-                if current and current.status == TaskStatus.CANCELLING:
-                    self.container.tasks_repository.transition(task_id, TaskStatus.CANCELLED)
+            if mirror:
+                if task.status == TaskStatus.CANCELLING:
+                    tasks.finish_cancelled(task_id)
+                else:
+                    assets = MirrorProvider().results(task.dataset_id, task.request_payload)
+                    tasks.apply_remote(task_id, 'successful', assets, self.container.settings.requests.poll_interval)
                 return
-            if not part.exists():
-                raise ProviderError("CDS 下载完成但未生成文件")
-            def publish() -> int:
-                size = part.stat().st_size
-                os.replace(part, target)
-                return size
-
-            finished = self.container.tasks_repository.finish_completed(task_id, publish=publish)
-            if finished.status == TaskStatus.COMPLETED:
-                self.container.accounts.record_success(account["id"])
-            elif part.exists():
-                part.unlink()
-        except DownloadCancelled:
-            monitor_stop.set()
-            monitor.join(timeout=2)
-            if part.exists():
-                part.unlink()
-            current = self.container.tasks.get(task_id)
-            if current and current.status == TaskStatus.CANCELLING:
-                self.container.tasks_repository.transition(task_id, TaskStatus.CANCELLED)
+            account = self.container.secrets.get_account(task.account_id) if task.account_id else None
+            if not account:
+                raise ProviderError('提交账号已不可用，请恢复原账号；不会改用其他账号查询。')
+            provider = CDSProvider(account)
+            if task.status == TaskStatus.SUBMITTING:
+                submission_id = provider.submit(task.dataset_id, task.request_payload)
+                tasks.record_submission(task_id, submission_id, self.container.settings.requests.poll_interval)
+            elif task.status == TaskStatus.CANCELLING:
+                if not task.remote_request_id:
+                    tasks.finish_cancelled(task_id)
+                    return
+                provider.cancel(task.remote_request_id)
+                tasks.finish_cancelled(task_id)
+            else:
+                status, assets = provider.inspect(task.remote_request_id)
+                tasks.apply_remote(task_id, status, assets, self.container.settings.requests.poll_interval,
+                                   remote_id=task.remote_request_id)
+        except SubmissionUncertain as exc:
+            tasks.submission_failed(task_id, str(exc), uncertain=True)
         except Exception as exc:
-            monitor_stop.set()
-            monitor.join(timeout=2)
-            if part.exists():
-                try:
-                    part.unlink()
-                except OSError:
-                    logger.warning("无法清理临时文件: %s", part)
-            logger.exception("任务 %s 下载失败", task_id)
-            try:
-                finished = self.container.tasks_repository.finish_failure(task_id, str(exc))
-                if finished.status != TaskStatus.CANCELLED:
-                    self.container.accounts.record_failure(account["id"], str(exc))
-            except (KeyError, ValueError):
-                logger.exception("任务 %s 写入失败状态失败", task_id)
+            message = str(exc) if isinstance(exc, ProviderError) else '请求操作失败，请检查后台连接或结果元数据。'
+            if task.status == TaskStatus.SUBMITTING:
+                if submission_id:
+                    tasks.record_submission(task_id, submission_id, self.container.settings.requests.poll_interval)
+                else:
+                    tasks.submission_failed(task_id, message, uncertain=not mirror and not isinstance(exc, ProviderError),
+                                            rejected=isinstance(exc, SubmissionRejected))
+            else:
+                tasks.query_failed(task_id, message)
 
-    def _overwrite_allowed(self, task) -> bool:
-        # The request-level flag is persisted in the repository, while the
-        # public TaskData intentionally does not expose it as a secret.
-        with self.container.database.session() as session:
-            from ecmwf_downloader.infrastructure.db import TaskRow
-
-            row = session.get(TaskRow, task.id)
-            return bool(row and row.overwrite)
-
-    def _cancel_requested(self, task_id: str) -> bool:
-        task = self.container.tasks.get(task_id)
-        return bool(task and (task.cancel_requested or task.status == TaskStatus.CANCELLING))
-
-    def _monitor_file(self, task_id: str, path: Path, stop: threading.Event) -> None:
-        last_size = -1
-        while not stop.wait(0.75):
-            try:
-                size = path.stat().st_size if path.exists() else 0
-                if size != last_size:
-                    self.container.tasks_repository.update_progress(
-                        task_id, downloaded_bytes=size, total_bytes=None, progress=None
-                    )
-                    last_size = size
-            except OSError:
-                continue
-
-
-class DownloadScheduler:
-    LEASE_NAME = "download-scheduler"
-
-    def __init__(
-        self,
-        container: AppContainer,
-        *,
-        max_workers: Optional[int] = None,
-        poll_interval: Optional[float] = None,
-    ):
+class RequestScheduler:
+    LEASE_NAME = "request-scheduler"
+    def __init__(self, container: AppContainer, *, max_workers=None, poll_interval=None):
         self.container = container
-        self.max_workers = max_workers or container.settings.download.max_workers
-        self.poll_interval = poll_interval or container.settings.download.poll_interval
-        self.owner_id = f"scheduler-{uuid4()}"
+        self._max_workers = max_workers
+        self._poll_interval = poll_interval
+        self.owner_id = 'scheduler-' + str(uuid4())
         self._stop = threading.Event()
-        self._thread: Optional[threading.Thread] = None
-        self._executor: Optional[ThreadPoolExecutor] = None
-        self._active: dict[str, Future] = {}
+        self._thread = None
+        self._executor = None
+        self._active = {}
         self._lock = threading.RLock()
-        self.engine = DownloadEngine(container)
+        self.engine = RequestEngine(container)
 
     @property
-    def is_running(self) -> bool:
-        return self._thread is not None and self._thread.is_alive()
+    def max_workers(self):
+        return self._max_workers or self.container.settings.requests.max_workers
 
     @property
-    def active_count(self) -> int:
+    def is_running(self):
+        return bool(self._thread and self._thread.is_alive())
+
+    @property
+    def active_count(self):
         with self._lock:
             return len(self._active)
 
-    def start(self) -> bool:
+    def start(self):
         if self.is_running:
             return True
         if not self.container.lease_repository.acquire(self.LEASE_NAME, self.owner_id):
             return False
-        recovered_ids = self.container.tasks_repository.recover_stale()
-        for task_id in recovered_ids:
-            task = self.container.tasks.get(task_id)
-            if task is None:
-                continue
-            part = Path(f"{task.output_path}.part")
-            try:
-                if part.exists():
-                    part.unlink()
-            except OSError:
-                logger.warning("无法清理遗留临时文件: %s", part)
+        self.container.tasks_repository.recover_stale()
         self._stop.clear()
-        self._executor = ThreadPoolExecutor(max_workers=self.max_workers, thread_name_prefix="ecmwf-worker")
-        self._thread = threading.Thread(target=self._loop, name="ecmwf-scheduler", daemon=True)
+        self._executor = ThreadPoolExecutor(max_workers=32, thread_name_prefix='ecmwf-request')
+        self._thread = threading.Thread(target=self._loop, name='ecmwf-request-scheduler', daemon=True)
         self._thread.start()
         return True
 
-    def stop(self) -> None:
+    def stop(self):
         self._stop.set()
-        if self._thread and self._thread.is_alive():
-            self._thread.join(timeout=max(2.0, self.poll_interval * 4))
-        self._thread = None
-        if self._executor:
-            self._executor.shutdown(wait=False, cancel_futures=False)
-            self._executor = None
-        self.container.lease_repository.release(self.LEASE_NAME, self.owner_id)
-
-    def _loop(self) -> None:
-        try:
-            while not self._stop.is_set():
-                if not self.container.lease_repository.renew(self.LEASE_NAME, self.owner_id):
-                    logger.error("调度器租约丢失，停止消费队列")
-                    return
-                with self._lock:
-                    active_ids = list(self._active)
-                for task_id in active_ids:
-                    self.container.tasks_repository.renew_task_lease(task_id, self.owner_id)
-                self._reap_finished()
-                self._fill_slots()
-                self._stop.wait(self.poll_interval)
-        finally:
-            self._reap_finished()
-
-    def _reap_finished(self) -> None:
+        if self._thread:
+            self._thread.join()
         with self._lock:
-            finished = [task_id for task_id, future in self._active.items() if future.done()]
-            for task_id in finished:
-                future = self._active.pop(task_id)
-                try:
-                    future.result()
-                except Exception:
-                    logger.exception("Worker 未处理异常: %s", task_id)
+            pending = list(self._active.values())
+        # 网络操作退出并持久化结果前持续续租，避免关停期间被其他进程重复领取。
+        while pending:
+            _, remaining = wait(pending, timeout=1)
+            pending = list(remaining)
+            self.container.lease_repository.renew(self.LEASE_NAME, self.owner_id)
+            for task_id in list(self._active):
+                self.container.tasks_repository.renew_task_lease(task_id, self.owner_id)
+        if self._executor:
+            self._executor.shutdown(wait=True)
+        self._reap_finished()
+        self.container.lease_repository.release(self.LEASE_NAME, self.owner_id)
+        self._thread = None
+        self._executor = None
 
-    def _fill_slots(self) -> None:
-        if self._executor is None:
-            return
-        while self.active_count < self.max_workers:
-            account = self.container.accounts.next_available()
-            if account is None:
+    def _loop(self):
+        while not self._stop.is_set():
+            if not self.container.lease_repository.renew(self.LEASE_NAME, self.owner_id):
+                logger.error('请求调度租约丢失，停止领取新操作')
                 return
-            task = self.container.tasks_repository.claim_next(self.owner_id)
+            for task_id in list(self._active):
+                self.container.tasks_repository.renew_task_lease(task_id, self.owner_id)
+            self._reap_finished()
+            # 运行中也恢复后来才过期的旧租约，不仅在启动时扫描。
+            self.container.tasks_repository.recover_stale()
+            self._fill_slots()
+            self._stop.wait(self._poll_interval or 0.25)
+
+    def _reap_finished(self):
+        with self._lock:
+            done = [task_id for task_id, future in self._active.items() if future.done()]
+            for task_id in done:
+                future = self._active.pop(task_id)
+                if future.exception():
+                    logger.error('请求 %s 后台操作异常，等待租约恢复', task_id)
+
+    def _fill_slots(self):
+        while not self._stop.is_set() and self.active_count < self.max_workers:
+            account = self.container.accounts.next_available()
+            task = self.container.tasks_repository.claim_next(
+                self.owner_id, account_id=account['id'] if account else None,
+                mirror_ids=FILE_MIRROR_IDS, exclude_ids=set(self._active), lease_name=self.LEASE_NAME)
             if task is None:
                 return
-            self.container.tasks_repository.set_account(task.id, account["id"])
-            future = self._executor.submit(self.engine.execute, task.id, account)
             with self._lock:
-                self._active[task.id] = future
+                self._active[task.id] = self._executor.submit(self.engine.execute, task.id)
