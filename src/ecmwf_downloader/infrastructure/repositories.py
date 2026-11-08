@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime, timedelta, timezone
+from collections import Counter
+from datetime import datetime, time, timedelta, timezone
 from typing import Any, Callable, Iterable, Optional
 from uuid import uuid4
 
 from sqlalchemy import case, func, or_, select
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import aliased
 
 from ecmwf_downloader.domain.models import (
     ACTIVE_STATUSES,
@@ -61,7 +63,7 @@ class TaskRepository:
             raise KeyError(f"请求不存在: {task_id}")
         return row
 
-    def _change(self, session, row, status, error=None):
+    def _change(self, session, row, status, error=None, *, used_account_id=None):
         previous = TaskStatus(row.status)
         if status != previous and not can_transition(previous, status):
             raise ValueError(f"非法状态转换: {previous.value} -> {status.value}")
@@ -75,9 +77,10 @@ class TaskRepository:
         if status in {TaskStatus.COMPLETED, TaskStatus.FAILED, TaskStatus.CANCELLED, TaskStatus.EXPIRED}:
             row.completed_at = row.updated_at
         if previous != status or error:
-            self._event(session, event_type="task.status_changed", task_id=row.id,
-                        payload={"from": previous.value, "status": status.value, "error_message": error},
-                        now=row.updated_at)
+            payload = {"from": previous.value, "status": status.value, "error_message": error}
+            if status == TaskStatus.COMPLETED:
+                payload["used_account_id"] = used_account_id
+            self._event(session, event_type="task.status_changed", task_id=row.id, payload=payload, now=row.updated_at)
 
     def create(self, *, dataset_id, request_payload, title, split_strategy=SplitStrategy.NONE,
                max_retries=3, task_id=None):
@@ -190,20 +193,22 @@ class TaskRepository:
             target = states[remote_status]
             if target == TaskStatus.FAILED:
                 self._account_failure(session, row, '远端请求失败')
-            if target == TaskStatus.COMPLETED and row.account_id and not row.account_success_recorded:
-                account = session.get(AccountStateRow, row.account_id)
-                if account is None:
-                    account = AccountStateRow(account_id=row.account_id, used_count=0, fail_count=0, status='active')
-                    session.add(account)
-                account.used_count += 1
-                account.fail_count = 0
-                account.last_used = _utc_now()
-                account.last_error = None
-                row.account_success_recorded = True
+            used_account_id = row.account_id if target == TaskStatus.COMPLETED and not row.account_success_recorded else None
             row.results = json_dumps(parsed) if target == TaskStatus.COMPLETED else '[]'
             row.next_retry_at = _utc_now() + timedelta(seconds=poll_interval) if target in ACTIVE_STATUSES else None
             self._change(session, row, target,
-                         '远端请求失败，请查看官方请求详情；可重新提交。' if target == TaskStatus.FAILED else None)
+                         '远端请求失败，请查看官方请求详情；可重新提交。' if target == TaskStatus.FAILED else None,
+                         used_account_id=used_account_id)
+            if used_account_id:
+                account = session.get(AccountStateRow, used_account_id)
+                if account is None:
+                    account = AccountStateRow(account_id=used_account_id, used_count=0, fail_count=0, status='active')
+                    session.add(account)
+                account.used_count += 1
+                account.fail_count = 0
+                account.last_used = row.updated_at
+                account.last_error = None
+                row.account_success_recorded = True
             return self._to_data(row)
 
     @staticmethod
@@ -462,6 +467,57 @@ class AccountStateRepository:
         with self.database.session() as session:
             rows = list(session.scalars(select(AccountStateRow)))
             return {row.account_id: row for row in rows}
+
+    def busy_account_ids(self) -> set[str]:
+        with self.database.session() as session:
+            return set(session.scalars(
+                select(TaskRow.account_id).distinct().where(
+                    TaskRow.account_id.is_not(None),
+                    TaskRow.status.in_([status.value for status in ACTIVE_STATUSES]),
+                )
+            ))
+
+    def today_usage(self) -> dict[str, int]:
+        today = _utc_now().astimezone().date()
+        start = datetime.combine(today, time.min).astimezone(timezone.utc)
+        end = datetime.combine(today + timedelta(days=1), time.min).astimezone(timezone.utc)
+        used_account = func.json_extract(TaskEventRow.payload, '$.used_account_id')
+        completions = (
+            TaskEventRow.event_type == 'task.status_changed',
+            func.json_extract(TaskEventRow.payload, '$.status') == TaskStatus.COMPLETED.value,
+            TaskEventRow.created_at >= start,
+            TaskEventRow.created_at < end,
+        )
+
+        # 旧事件只可回溯仍保留账号绑定的最后一次提交。
+        history = aliased(TaskEventRow)
+        last_resubmission = (
+            select(func.max(history.id))
+            .where(history.task_id == TaskRow.id, history.event_type == 'task.resubmitted')
+            .correlate(TaskRow).scalar_subquery()
+        )
+        first_completion = (
+            select(func.min(history.id))
+            .where(history.task_id == TaskRow.id, history.event_type == 'task.status_changed',
+                   func.json_extract(history.payload, '$.status') == TaskStatus.COMPLETED.value,
+                   history.id > func.coalesce(last_resubmission, 0))
+            .correlate(TaskRow).scalar_subquery()
+        )
+        legacy = (
+            select(TaskRow.account_id, func.count())
+            .select_from(TaskEventRow)
+            .join(TaskRow, TaskRow.id == TaskEventRow.task_id)
+            .where(*completions, func.json_type(TaskEventRow.payload, '$.used_account_id').is_(None),
+                   TaskRow.account_id.is_not(None), TaskRow.account_success_recorded,
+                   TaskEventRow.id == first_completion)
+            .group_by(TaskRow.account_id)
+        )
+        with self.database.session() as session:
+            counts = Counter(dict(session.execute(
+                select(used_account, func.count()).where(*completions, used_account.is_not(None)).group_by(used_account)
+            ).all()))
+            counts.update(dict(session.execute(legacy).all()))
+            return dict(counts)
 
     def mark_success(self, account_id: str) -> None:
         now = _utc_now()

@@ -92,7 +92,9 @@ class AccountData(BaseModel):
     email: str
     url: str
     status: AccountStatus
+    is_busy: bool = False
     used_count: int = 0
+    today_used_count: int = 0
     fail_count: int = 0
     last_used: Optional[datetime] = None
     last_error: Optional[str] = None

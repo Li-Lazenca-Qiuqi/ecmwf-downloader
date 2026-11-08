@@ -97,9 +97,9 @@ progress { width: 70px; height: 6px; accent-color: var(--blue); }
 .queue-page .task-table .selection-cell { padding-inline: 0; text-align: center; }
 .request-checkbox { width: 16px; height: 16px; padding: 0; margin: 0; vertical-align: middle; cursor: pointer; accent-color: var(--blue); }
 .request-checkbox:disabled { cursor: not-allowed; }
-.task-table tbody .request-checkbox { opacity: 0; }
-.task-table tr:hover .request-checkbox, .task-table tr:focus-within .request-checkbox, .task-table tbody .request-checkbox:checked { opacity: 1; }
-.task-table tr.is-selected { background: #f1f6fe; }
+:is(.task-table, .account-table) tbody .request-checkbox { opacity: 0; }
+:is(.task-table, .account-table) tr:hover .request-checkbox, :is(.task-table, .account-table) tr:focus-within .request-checkbox, :is(.task-table, .account-table) tbody .request-checkbox:checked { opacity: 1; }
+:is(.task-table, .account-table) tr.is-selected { background: #f1f6fe; }
 .selection-count { display: inline-flex; align-items: center; font-size: 12px; color: var(--blue); }
 .footer-summary, .pagination { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
 .footer-summary [role="status"] { color: var(--blue); }
@@ -118,7 +118,7 @@ progress { width: 70px; height: 6px; accent-color: var(--blue); }
   .queue-page .task-table .status-badge { white-space: normal; }
   .queue-page .task-table .button { padding: 6px; white-space: normal; }
 }
-@media (hover: none) { .task-table tbody .request-checkbox { opacity: 1; } }
+@media (hover: none) { :is(.task-table, .account-table) tbody .request-checkbox { opacity: 1; } }
 .notice { border: 1px solid #ceddf4; border-radius: 6px; background: #f1f6fd; padding: 11px 14px; color: #3e5678; font-size: 13px; margin: 14px 0; overflow-wrap: anywhere; }
 .notice.error { color: var(--red); border-color: #efcbc7; background: #fff5f4; }
 .panel > .notice { margin: 12px 15px; }
@@ -146,14 +146,19 @@ fieldset > label + label { margin-top: 20px; }
 .form-actions { display: flex; justify-content: space-between; align-items: center; gap: 12px; border-top: 1px solid var(--line); padding-top: 18px; margin-top: 20px; }
 .preview-result li { margin-top: 6px; }
 .preview-result p { font-size: 12px; margin-bottom: 0; }
-.account-table { min-width: 850px; }
+.account-table { min-width: 720px; }
 .account-table th { white-space: nowrap; }
+.account-table .selection-cell { width: 42px; padding-inline: 8px; text-align: center; }
 .account-table tbody tr:last-child td { border-bottom: 0; }
-.account-email, .account-url { max-width: 260px; overflow-wrap: anywhere; }
+.account-email { max-width: 260px; overflow-wrap: anywhere; }
 .account-table .row-actions { flex-wrap: nowrap; }
 .account-status { white-space: nowrap; color: #087958; font-size: 12px; }
+.account-status.busy { color: #986400; }
 .account-status.disabled { color: var(--muted); }
 .account-status.error { color: var(--red); }
+.account-test-result { display: block; max-width: 220px; margin-top: 4px; color: var(--muted); overflow-wrap: anywhere; }
+.account-test-result.passed { color: #087958; }
+.account-test-result.failed { color: var(--red); }
 .dialog-backdrop { position: fixed; inset: 0; background: #15243d44; display: flex; align-items: center; justify-content: center; padding: 24px; z-index: 10; }
 .account-editor { width: min(480px, 100%); max-height: calc(100dvh - 48px); border-radius: 12px; padding: 24px; overflow-y: auto; box-shadow: 0 16px 48px #15243d26; }
 .account-editor form { margin-top: 24px; }

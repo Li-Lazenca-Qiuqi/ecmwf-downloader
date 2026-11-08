@@ -2,13 +2,15 @@ import json
 from datetime import datetime, timedelta, timezone
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy import func, update
 from typer.testing import CliRunner
 from ecmwf_downloader.application.container import AppContainer
 from ecmwf_downloader.application.worker import RequestEngine
 from ecmwf_downloader.config import AppSettings, RequestSettings
 from ecmwf_downloader.domain.models import SplitStrategy, TaskStatus
 from ecmwf_downloader.infrastructure.cds import CDSProvider, ProviderError, SubmissionUncertain
-from ecmwf_downloader.infrastructure.db import TaskRow
+from ecmwf_downloader.infrastructure import repositories
+from ecmwf_downloader.infrastructure.db import TaskEventRow, TaskRow
 from ecmwf_downloader.interfaces.http.app import create_app
 from ecmwf_downloader.interfaces.cli.app import app
 
@@ -151,6 +153,77 @@ def test_multiple_results_refresh_does_not_double_count_account(container, monke
     assert len(container.tasks.get(task.id).results)==2 and container.accounts.list()[0].used_count==1
     with TestClient(create_app(container, with_worker=False)) as client:
         assert len(client.get('/api/v1/tasks/'+task.id+'/links').json()['items'])==2
+
+def test_account_busy_tracks_bound_active_requests(container):
+    repo = container.tasks_repository
+    account = container.accounts.list()[0]
+    other = container.accounts.add(email='idle@example.invalid', key='fake', url='https://example.invalid')
+    first, second = [container.tasks.create(dataset_id='test', request_payload={})[0] for _ in range(2)]
+
+    with TestClient(create_app(container, with_worker=False)) as client:
+        def expect_busy(expected):
+            accounts = {item['id']: item for item in client.get('/api/v1/accounts').json()['items']}
+            assert accounts[account.id]['is_busy'] is expected
+            assert accounts[account.id]['status'] == 'active'
+            assert accounts[other.id]['is_busy'] is False
+
+        expect_busy(False)
+        assert repo.claim_next('test-worker', account_id=account.id).id == first.id
+        expect_busy(True)
+        repo.record_submission(first.id, 'first', 60)
+        expect_busy(True)
+        repo.apply_remote(first.id, 'running', [], 60, remote_id='first')
+        expect_busy(True)
+        assert repo.claim_next('test-worker', account_id=account.id).id == second.id
+        repo.record_submission(second.id, 'second', 60)
+        repo.apply_remote(first.id, 'successful', ASSETS, 60, remote_id='first')
+        expect_busy(True)
+        container.tasks.cancel(second.id)
+        expect_busy(True)
+        repo.finish_cancelled(second.id)
+        expect_busy(False)
+        container.tasks.refresh(first.id)
+        expect_busy(True)
+        repo.apply_remote(first.id, 'expired', [], 60, remote_id='first')
+        expect_busy(False)
+
+
+def test_daily_cds_usage_uses_local_midnight_and_survives_refresh_and_deletion(container, monkeypatch):
+    midnight = datetime(2026, 11, 8).astimezone(timezone.utc)
+    now = midnight - timedelta(minutes=1)
+    monkeypatch.setattr(repositories, '_utc_now', lambda: now)
+    account_id = container.accounts.list()[0].id
+    another = container.accounts.add(email='other@example.invalid', key='fake', url='https://example.invalid')
+
+    def complete_with(account_id):
+        task = container.tasks.create(dataset_id='test', request_payload={})[0]
+        repo = container.tasks_repository
+        assert repo.claim_next('test-worker', account_id=account_id).id == task.id
+        repo.record_submission(task.id, task.id, 1)
+        return repo.apply_remote(task.id, 'successful', ASSETS, 1, remote_id=task.id)
+
+    earlier = complete_with(account_id)
+    # 移除新标记，模拟升级前已保存的首次完成事件。
+    with container.database.session(immediate=True) as session:
+        session.execute(update(TaskEventRow).where(TaskEventRow.task_id == earlier.id)
+                        .values(payload=func.json_remove(TaskEventRow.payload, '$.used_account_id')))
+    assert container.accounts.list()[0].today_used_count == 1
+
+    now = midnight
+    container.tasks.refresh(earlier.id)
+    container.tasks_repository.apply_remote(earlier.id, 'successful', ASSETS, 1, remote_id=earlier.id)
+    assert container.accounts.list()[0].today_used_count == 0
+
+    complete_with(account_id)
+    today = complete_with(another.id)
+    container.tasks.delete(today.id)
+    with TestClient(create_app(container, with_worker=False)) as client:
+        accounts = {item['id']: item for item in client.get('/api/v1/accounts').json()['items']}
+        assert accounts[account_id]['today_used_count'] == 1
+        assert accounts[account_id]['used_count'] == 2
+        assert accounts[another.id]['today_used_count'] == 1
+        assert accounts[another.id]['last_used'] is not None
+
 
 def test_empty_result_not_ready_and_bound_account_never_rotates(container, monkeypatch):
     task = submitted(container, monkeypatch)

@@ -154,6 +154,8 @@ class AccountService:
 
     def list(self) -> list[AccountData]:
         state = self.states.snapshot()
+        today_usage = self.states.today_usage()
+        busy_accounts = self.states.busy_account_ids()
         result = []
         for account in self.secrets.accounts():
             account_id = str(account.get("id", ""))
@@ -165,7 +167,9 @@ class AccountService:
                     email=str(account.get("email", "")),
                     url=str(account.get("url", "https://cds.climate.copernicus.eu/api")),
                     status=status,
+                    is_busy=account_id in busy_accounts,
                     used_count=row.used_count if row else 0,
+                    today_used_count=today_usage.get(account_id, 0),
                     fail_count=row.fail_count if row else 0,
                     last_used=row.last_used if row else None,
                     last_error=row.last_error if row else None,

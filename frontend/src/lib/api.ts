@@ -23,7 +23,9 @@ export type Account = {
   email: string
   url: string
   status: 'active' | 'disabled' | 'error'
+  is_busy: boolean
   used_count: number
+  today_used_count: number
   fail_count: number
   last_used: string | null
   last_error: string | null
