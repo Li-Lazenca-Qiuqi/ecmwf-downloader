@@ -267,6 +267,17 @@ def create_app(container: Optional[AppContainer] = None, *, with_worker: bool = 
         app_container.update_settings({'ai': body.model_dump(exclude={'api_key'})}, ai_key=key)
         return app_container.ai.configuration()
 
+    @app.post("/api/v1/ai/test")
+    def test_ai_connection(body: AIConfigBody):
+        key = body.api_key.get_secret_value().strip() if body.api_key else ''
+        try:
+            app_container.ai.test_connection(
+                base_url=body.base_url, model=body.model, json_mode=body.json_mode, api_key=key,
+            )
+        except RuntimeError as exc:
+            return _problem(503, str(exc), "AI 服务不可用")
+        return {"message": "连接成功，模型已响应。"}
+
     @app.post("/api/v1/ai/suggestions")
     def ai_suggestion(body: AISuggestionBody):
         try:

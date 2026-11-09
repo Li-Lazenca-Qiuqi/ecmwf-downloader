@@ -2,7 +2,7 @@
 
 The adapter lives in the new package so the installed wheel does not depend
 on the retired ``src.core`` modules.  The optional ``openai`` package is only
-imported when a suggestion is requested.
+imported when a completion is requested.
 """
 
 from __future__ import annotations
@@ -10,7 +10,6 @@ from __future__ import annotations
 import importlib.util
 import json
 import logging
-import math
 import re
 from typing import Any
 
@@ -57,11 +56,6 @@ class AIService:
             raise RuntimeError("AI 功能未启用")
         if not config.get("api_key"):
             raise RuntimeError("AI API Key 未配置，请使用 ecmwf config set-ai-key")
-        try:
-            from openai import OpenAI
-        except ImportError as exc:
-            raise RuntimeError("AI 功能需要安装可选依赖 openai，请运行 uv sync --extra ai") from exc
-
         fields = [field for field in field_schema.get('fields', []) if field.get('request_field', True) or field.get('field_type') == 'exclusive']
         if not fields:
             raise RuntimeError('请先获取数据集字段，再补全参数')
@@ -88,23 +82,65 @@ class AIService:
                 ),
             },
         ]
+        result = self._json_object(self._complete(config, messages))
+        for wrapper in ['parameters', 'request_payload']:
+            if set(result) == {wrapper} and isinstance(result[wrapper], dict) and not any(field['name'] == wrapper for field in fields):
+                result = result[wrapper]
+        self._validate(result, fields)
+        if not result:
+            raise RuntimeError('AI 未给出可用参数，请补充变量、时间或区域信息')
+        return result
+
+    def test_connection(self, *, base_url: str, model: str, json_mode: bool, api_key: str) -> None:
+        """使用表单草稿发送一个最小请求，验证后不写入设置。"""
+        config = self._config()
+        if not api_key:
+            if base_url != public_service_url(str(config['base_url'])) or not config.get('api_key'):
+                raise ValueError('请填写当前服务地址对应的 API Key 再测试。')
+            api_key = config['api_key']
+        config.update(base_url=base_url, model=model, json_mode=json_mode, api_key=api_key)
+        content = self._complete(
+            config, [{'role': 'user', 'content': '请只返回 JSON 对象 {"ok": true}。'}],
+            token_limit=128, timeout=15,
+        )
+        if json_mode:
+            self._json_object(content)
+
+    @staticmethod
+    def _complete(
+        config: dict[str, Any], messages: list[dict[str, str]], *,
+        token_limit: int | None = None, timeout: float | None = None,
+    ) -> str:
+        try:
+            from openai import OpenAI
+        except ImportError:
+            raise RuntimeError("AI 功能需要安装可选依赖 openai，请运行 uv sync --extra ai") from None
+
         base_url = public_service_url(str(config['base_url']))
         if not base_url:
             raise RuntimeError('AI 服务地址无效，请在设置中填写无凭据的 HTTP 或 HTTPS URL')
+        model = str(config.get("model") or "gpt-4o-mini")
+        model_id = model.rsplit('/', 1)[-1]
+        options: dict[str, Any] = {
+            'max_completion_tokens': token_limit if token_limit is not None else int(config.get('max_tokens', 4096)),
+        }
+        if model_id == 'gpt-6-luna':
+            options['reasoning_effort'] = 'none'
+        elif not model_id.startswith('gpt-6'):
+            options['temperature'] = float(config.get('temperature', 0.3))
         # SDK 的调试日志包含原始响应及异常，保留应用自己的安全错误提示。
         logging.getLogger('openai').setLevel(logging.WARNING)
         try:
             with OpenAI(
                 api_key=str(config["api_key"]),
                 base_url=base_url,
-                timeout=float(config.get("timeout", 120)),
+                timeout=timeout if timeout is not None else float(config.get("timeout", 120)),
                 max_retries=0,
             ) as client:
                 response = client.chat.completions.create(
-                    model=str(config.get("model") or "gpt-4o-mini"),
+                    model=model,
                     messages=messages,
-                    temperature=float(config.get("temperature", 0.3)),
-                    max_tokens=int(config.get("max_tokens", 4096)),
+                    **options,
                     **({'response_format': {'type': 'json_object'}} if config.get('json_mode') else {}),
                 )
                 choice = response.choices[0] if response.choices else None
@@ -114,16 +150,25 @@ class AIService:
         except Exception as exc:
             if isinstance(exc, RuntimeError) and str(exc).startswith('AI 响应不完整'):
                 raise RuntimeError('AI 响应不完整，请缩小请求范围后重试') from None
+            if type(exc).__name__ == 'BadRequestError':
+                parameter = getattr(exc, 'param', None)
+                if parameter in ('max_tokens', 'max_completion_tokens', 'temperature', 'reasoning_effort', 'response_format'):
+                    raise RuntimeError(f'AI 服务拒绝请求参数 {parameter}，请检查服务和模型兼容性。') from None
             message = {'AuthenticationError': 'AI 认证失败，请检查 API Key',
                        'PermissionDeniedError': 'AI 服务拒绝访问，请检查账号权限和模型',
+                       'NotFoundError': '找不到 AI 模型或接口，请检查模型名称与服务地址',
                        'RateLimitError': 'AI 服务额度不足或请求过于频繁，请稍后重试',
                        'APITimeoutError': 'AI 请求超时，请稍后重试',
                        'APIConnectionError': '无法连接 AI 服务，请检查服务地址与网络',
-                       'BadRequestError': 'AI 服务不接受当前模型或请求参数，请检查配置；兼容服务可尝试关闭 JSON 模式'}.get(type(exc).__name__, 'AI 服务调用失败，请检查配置或稍后重试')
+                       'BadRequestError': 'AI 服务不接受当前模型或请求参数，请检查服务地址和模型'}.get(type(exc).__name__, 'AI 服务调用失败，请检查配置或稍后重试')
             raise RuntimeError(message) from None
 
-        if not content:
+        if not content or not content.strip():
             raise RuntimeError("AI 返回空响应")
+        return content
+
+    @staticmethod
+    def _json_object(content: str) -> dict[str, Any]:
         content = content.strip()
         content = re.sub(r'^```(?:json)?\s*([\s\S]*?)\s*```$', r'\1', content, flags=re.IGNORECASE)
         def reject_constant(_value: str) -> None:
@@ -134,12 +179,6 @@ class AIService:
             raise RuntimeError("AI 返回的不是有效 JSON，请调整需求后重试") from None
         if not isinstance(result, dict):
             raise RuntimeError("AI 返回必须是 JSON 对象")
-        for wrapper in ['parameters', 'request_payload']:
-            if set(result) == {wrapper} and isinstance(result[wrapper], dict) and not any(field['name'] == wrapper for field in fields):
-                result = result[wrapper]
-        self._validate(result, fields)
-        if not result:
-            raise RuntimeError('AI 未给出可用参数，请补充变量、时间或区域信息')
         return result
 
     @staticmethod

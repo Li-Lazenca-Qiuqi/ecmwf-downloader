@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { Link, useSearchParams } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { ChevronLeft, ChevronRight, Plus, RefreshCw, Search, X, Copy, FileText } from 'lucide-react'
+import { ChevronLeft, ChevronRight, Plus, RefreshCw, Search, X, Copy, FileText, Trash2 } from 'lucide-react'
 import { api, type Task, type Summary } from '../lib/api'
 import { ErrorNotice, Loading, StatusBadge, formatBytes, formatDate, statusLabels } from '../components'
 import CardSelect from '../CardSelect'
@@ -38,6 +38,13 @@ function retryLabel(task: Task) {
     return task.cancel_requested ? '重试取消' : '继续监视'
   return '重新提交'
 }
+function canDelete(task: Task) {
+  if (task.status === 'failed') {
+    return !task.remote_request_id || ['failed', 'rejected', 'dismissed', 'expired'].includes(task.remote_status || '')
+  }
+  return ['completed', 'cancelled', 'expired'].includes(task.status)
+}
+
 export default function QueuePage() {
   const [search, setSearch] = useState('')
   const [status, setStatus] = useState('')
@@ -53,8 +60,17 @@ export default function QueuePage() {
   if (status) query.set('status', status)
   const tasks = useQuery({ queryKey: ['tasks', query.toString()], queryFn: () => api.tasks('?' + query), refetchInterval: 5000 })
   const action = useMutation({
-    mutationFn: ({ id, operation }: { id: string; operation: 'cancel' | 'retry' | 'refresh' }) => api.action(id, operation),
-    onSuccess: () => {
+    mutationFn: ({ id, operation }: { id: string; operation: 'cancel' | 'retry' | 'delete' }) =>
+      operation === 'delete' ? api.deleteTask(id) : api.action(id, operation),
+    onSuccess: (_result, { id, operation }) => {
+      if (operation === 'delete') {
+        setSelectedIds(current => {
+          const next = new Set(current)
+          next.delete(id)
+          return next
+        })
+        if (selectedId === id) setParams({})
+      }
       void queryClient.invalidateQueries({ queryKey: ['tasks'] })
       void queryClient.invalidateQueries({ queryKey: ['summary'] })
     },
@@ -70,6 +86,13 @@ export default function QueuePage() {
       void queryClient.invalidateQueries({ queryKey: ['summary'] })
     },
   })
+  const lastOffset = tasks.data ? Math.max(0, Math.floor((tasks.data.total - 1) / pageSize) * pageSize) : offset
+  useEffect(() => {
+    if (offset > lastOffset) {
+      setOffset(lastOffset)
+      setSelectedIds(new Set())
+    }
+  }, [offset, lastOffset])
   const counts = summary.data?.by_status
   const total = tasks.data?.total ?? 0
   const items = tasks.data?.items ?? []
@@ -97,6 +120,12 @@ export default function QueuePage() {
         <FileText size={17} aria-hidden="true" />
       </button>
     </>}
+    {canDelete(task) && <button type="button" className="task-icon-button danger" title="删除请求记录"
+      aria-label="删除请求记录" disabled={action.isPending} onClick={() => {
+        if (window.confirm('删除这条本地请求记录？删除后将无法在队列中查看它的详情和结果链接。')) {
+          action.mutate({ id: task.id, operation: 'delete' })
+        }
+      }}><Trash2 size={16} aria-hidden="true" /></button>}
     {task.status === 'submission_unknown' && <button type="button" className="button" onClick={() => setParams({ selected: task.id })}>核实提交</button>}
   </div>
   return <section className="page queue-page">

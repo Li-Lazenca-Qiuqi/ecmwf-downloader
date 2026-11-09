@@ -91,6 +91,7 @@ export const api = {
   preview: (body: RequestBody) => post<{ items: RequestPreviewItem[]; warnings: string[] }>('/api/v1/requests/preview', body),
   createTasks: (body: RequestBody) => post<{ items: Task[] }>('/api/v1/tasks', body),
   action: (id: string, action: 'cancel' | 'retry' | 'refresh') => post<Task>(`/api/v1/tasks/${id}/${action}`),
+  deleteTask: (id: string) => request(`/api/v1/tasks/${id}`, { method: 'DELETE' }),
   attach: (id: string, remote_request_id: string) => post<Task>('/api/v1/tasks/' + id + '/attach', { remote_request_id }),
   datasets: (refresh = false, source = 'cds') => request<DatasetCatalogue>(`/api/v1/datasets?${new URLSearchParams({ refresh: String(refresh), source })}`),
   schema: (id: string, refresh = false, prefix = 'e5.oper.an.sfc/202401/') => request<Schema>(`/api/v1/datasets/${encodeURIComponent(id)}/schema?${new URLSearchParams({ refresh: String(refresh), prefix })}`),
@@ -104,6 +105,9 @@ export const api = {
   testAccount: (id: string) => post<{ ok: boolean; message: string }>(`/api/v1/accounts/${id}/test`),
   suggestion: (body: { field_schema: Schema & { current_selection?: Record<string, unknown> }; user_request: string }) => post<{ suggestion: Record<string, unknown> }>('/api/v1/ai/suggestions', body),
   aiConfig: () => request<AIConfig>('/api/v1/ai/config'),
+  testAIConfig: (body: AIConfigInput) => post<{ message: string }>('/api/v1/ai/test', body),
   saveAIConfig: (body: AIConfigInput) => request<AIConfig>('/api/v1/ai/config', { method: 'PATCH', body: JSON.stringify(body) }),
   settings: () => request<Settings>('/api/v1/settings'),
+  saveRequestSettings: (requests: Partial<Pick<Settings['requests'], 'poll_interval' | 'max_retries'>>) =>
+    request<Settings>('/api/v1/settings', { method: 'PATCH', body: JSON.stringify({ values: { requests } }) }),
 }

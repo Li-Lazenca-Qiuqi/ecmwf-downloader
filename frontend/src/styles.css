@@ -87,9 +87,10 @@ progress { width: 70px; height: 6px; accent-color: var(--blue); }
 .queue-page .status-column { width: 14%; }
 .queue-page .remote-column { width: 24%; }
 .queue-page .date-column { width: 16%; }
-.queue-page .actions-column { width: 116px; }
+.queue-page .actions-column { width: 144px; }
 .task-icon-button { display: inline-grid; place-items: center; width: 32px; height: 32px; padding: 0; border: 0; border-radius: 6px; background: transparent; color: #455770; }
 .task-icon-button:hover:not(:disabled) { background: #eaf2ff; color: var(--blue); }
+.task-icon-button.danger:hover:not(:disabled) { background: #fff0ee; color: var(--red); }
 .queue-page .task-table th { height: var(--queue-control-height); padding-block: 0; line-height: 16px; }
 .queue-page .task-table td { padding-block: 8px; line-height: 20px; overflow-wrap: anywhere; }
 .queue-page .task-table .filename { display: block; }
@@ -97,8 +98,9 @@ progress { width: 70px; height: 6px; accent-color: var(--blue); }
 .queue-page .task-table .selection-cell { padding-inline: 0; text-align: center; }
 .request-checkbox { width: 16px; height: 16px; padding: 0; margin: 0; vertical-align: middle; cursor: pointer; accent-color: var(--blue); }
 .request-checkbox:disabled { cursor: not-allowed; }
-:is(.task-table, .account-table) tbody .request-checkbox { opacity: 0; }
-:is(.task-table, .account-table) tr:hover .request-checkbox, :is(.task-table, .account-table) tr:focus-within .request-checkbox, :is(.task-table, .account-table) tbody .request-checkbox:checked { opacity: 1; }
+:is(.task-table, .account-table) .request-checkbox { opacity: 0; }
+:is(.task-table, .account-table) :is(thead:hover, tr:hover, tr:focus-within) .request-checkbox,
+:is(.task-table, .account-table) .request-checkbox:is(:checked, :indeterminate) { opacity: 1; }
 :is(.task-table, .account-table) tr.is-selected { background: #f1f6fe; }
 .selection-count { display: inline-flex; align-items: center; font-size: 12px; color: var(--blue); }
 .footer-summary, .pagination { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
@@ -113,12 +115,12 @@ progress { width: 70px; height: 6px; accent-color: var(--blue); }
   .queue-page .remote-column { width: 0; }
   .queue-page .task-table .remote-cell { display: none; }
   .queue-page .status-column { width: 25%; }
-  .queue-page .actions-column { width: 104px; }
+  .queue-page .actions-column { width: 128px; }
   .queue-page .task-table td, .queue-page .task-table th { padding-inline: 8px; }
   .queue-page .task-table .status-badge { white-space: normal; }
   .queue-page .task-table .button { padding: 6px; white-space: normal; }
 }
-@media (hover: none) { :is(.task-table, .account-table) tbody .request-checkbox { opacity: 1; } }
+@media (hover: none) { :is(.task-table, .account-table) .request-checkbox { opacity: 1; } }
 .notice { border: 1px solid #ceddf4; border-radius: 6px; background: #f1f6fd; padding: 11px 14px; color: #3e5678; font-size: 13px; margin: 14px 0; overflow-wrap: anywhere; }
 .notice.error { color: var(--red); border-color: #efcbc7; background: #fff5f4; }
 .panel > .notice { margin: 12px 15px; }
@@ -163,9 +165,12 @@ fieldset > label + label { margin-top: 20px; }
 .account-editor { width: min(480px, 100%); max-height: calc(100dvh - 48px); border-radius: 12px; padding: 24px; overflow-y: auto; box-shadow: 0 16px 48px #15243d26; }
 .account-editor form { margin-top: 24px; }
 .settings-page { max-width: 900px; }
-.settings-list { display: grid; grid-template-columns: 150px 1fr; gap: 0; font-size: 14px; }
-.settings-list dt, .settings-list dd { padding: 18px 20px; border-bottom: 1px solid #edf0f5; }
-.settings-list dt:last-of-type, .settings-list dd:last-child { border-bottom: 0; }
+.settings-requests { padding: 22px; }
+.settings-request-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; margin-top: 16px; }
+.settings-request-fields input { width: 100%; }
+.settings-request-fields .helper { margin: 6px 0 0; }
+.settings-request-actions { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap-reverse; gap: 10px; margin-top: 16px; }
+.settings-request-actions .helper { color: #087958; }
 .spin { animation: spin 1s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
 @media (max-width: 850px) {
@@ -191,8 +196,7 @@ fieldset > label + label { margin-top: 20px; }
   .form-grid { grid-template-columns: 1fr; }
   .form-actions { align-items: stretch; flex-direction: column; }
   .form-actions .row-actions { justify-content: flex-end; }
-  .settings-list { grid-template-columns: 105px 1fr; font-size: 12px; }
-  .settings-list dt, .settings-list dd { padding: 15px 12px; }
+  .settings-request-fields { grid-template-columns: minmax(0, 1fr); }
 }
 @media (prefers-reduced-motion: reduce) { .spin { animation: none; } }
 
@@ -206,11 +210,10 @@ fieldset > label + label { margin-top: 20px; }
 /* 共享设置与数据集控件，独立于请求页的布局。 */
 .settings-ai { padding: 22px; margin-bottom: 22px; scroll-margin-top: 20px; }
 .settings-ai-heading { display: flex; align-items: flex-start; justify-content: space-between; flex-wrap: wrap; gap: 12px; margin-bottom: 18px; }
+.ai-service-heading { display: flex; align-items: flex-start; gap: 12px; min-width: 0; }
+.ai-service-icon { flex: none; display: grid; place-items: center; width: 36px; height: 36px; border-radius: 9px; color: var(--blue); background: #edf4ff; }
 .settings-ai-heading h2 { margin: 0; font-size: 16px; }
 .settings-ai-heading p { margin: 7px 0 0; }
-.settings-ai-details { display: grid; grid-template-columns: 90px minmax(0, 1fr); gap: 12px 16px; margin: 0; font-size: 13px; }
-.settings-ai-details dt { color: var(--muted); }
-.settings-ai-details dd { margin: 0; overflow-wrap: anywhere; }
 .directory-address { display: flex; gap: 8px; min-width: 0; }
 .directory-address input { flex: 1; width: 0; }
 .dataset-picker { min-width: 0; }
@@ -236,16 +239,20 @@ fieldset > label + label { margin-top: 20px; }
 .ai-input-wrap textarea::placeholder { color: #8793a6; }
 .ai-send { position: absolute; right: 14px; bottom: 14px; min-height: 34px; width: 34px; padding: 0; border-radius: 8px; }
 .ai-result-notice { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; margin-top: 10px; padding: 10px 12px; background: #edf4ff; border-radius: 8px; color: #345b91; font-size: 12px; line-height: 1.6; }
-.ai-config-dialog { width: min(520px, calc(100% - 32px)); max-height: calc(100dvh - 48px); padding: 24px; border: 1px solid var(--line); border-radius: 12px; color: #15243d; box-shadow: 0 24px 80px #10254b30; }
-.ai-config-dialog::backdrop { background: #15243d66; }
-.ai-config-heading { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; margin-bottom: 20px; }
-.ai-config-heading h2 { margin: 0; font-size: 18px; }
-.ai-config-heading p { margin: 7px 0 0; line-height: 1.6; }
-.ai-config-dialog fieldset { display: grid; gap: 14px; margin: 0; padding: 0; border: 0; }
-.ai-config-dialog fieldset > label:not(.option) { display: grid; gap: 7px; font-size: 12px; color: #344761; }
-.ai-config-dialog input:not([type="checkbox"]) { width: 100%; }
-.ai-config-dialog .helper { margin: -6px 0 0; line-height: 1.6; }
-.ai-config-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 24px; }
+.ai-enable-control { display: inline-flex; align-items: center; gap: 8px; font-size: 13px; }
+.ai-config-fields { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 1fr); gap: 14px; padding-top: 16px; border-top: 1px solid var(--line); }
+.ai-config-fields > label { display: grid; gap: 7px; margin: 0; font-size: 13px; color: #344761; }
+.ai-config-fields input { width: 100%; }
+.ai-config-key { grid-column: 1 / -1; }
+.ai-json-control { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 16px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; background: #f8faff; }
+.ai-json-control small { display: block; margin-top: 3px; color: var(--muted); line-height: 1.5; }
+.ai-config-switch { appearance: none; flex: none; position: relative; width: 34px; height: 20px; margin: 0; padding: 0; border: 0; border-radius: 10px; background: #a7b5c9; cursor: pointer; }
+.ai-config-switch::before { position: absolute; top: 3px; left: 3px; width: 14px; height: 14px; border-radius: 50%; background: #fff; content: ""; }
+.ai-config-switch:checked { background: var(--blue); }
+.ai-config-switch:checked::before { transform: translateX(14px); }
+.ai-config-switch:disabled { opacity: .55; }
+.ai-config-actions { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px; margin-top: 20px; }
+@media (max-width: 520px) { .ai-config-fields { grid-template-columns: minmax(0, 1fr); } }
 .parameter-field { margin-top: 14px; border: 1px solid var(--line); border-radius: 7px; padding: 15px; }
 .field-title { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; margin-bottom: 10px; }
 .field-title h3 { margin: 0; font-size: 14px; }
@@ -286,7 +293,6 @@ fieldset > label + label { margin-top: 20px; }
   .dataset-selector { flex-wrap: wrap; }
   .dataset-selector input { min-width: 140px; }
   .option-list { grid-template-columns: 1fr; }
-  .ai-config-dialog { padding: 20px; }
 }
 
 /* 通用参数控件采用紧凑的分组、边框和状态反馈。 */

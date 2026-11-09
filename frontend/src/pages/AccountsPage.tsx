@@ -16,15 +16,13 @@ export default function AccountsPage() {
   const queryClient = useQueryClient()
   const accounts = useQuery({ queryKey: ['accounts'], queryFn: api.accounts, refetchInterval: 10000 })
   const test = useMutation({
-    mutationFn: async (ids: string[]) => {
-      for (const id of ids) {
-        const result = await api.testAccount(id).catch((error: unknown) => ({
-          ok: false,
-          message: error instanceof Error ? error.message : '连接测试失败，请重试。',
-        }))
-        setTestResults(current => new Map(current).set(id, result))
-      }
-    },
+    mutationFn: (ids: string[]) => Promise.all(ids.map(async id => {
+      const result = await api.testAccount(id).catch((error: unknown) => ({
+        ok: false,
+        message: error instanceof Error ? error.message : '连接测试失败，请重试。',
+      }))
+      setTestResults(current => new Map(current).set(id, result))
+    })),
   })
   const items = accounts.data?.items ?? []
   const selected = items.filter(account => selectedIds.has(account.id))
@@ -87,9 +85,8 @@ export default function AccountsPage() {
         </tr></thead>
         <tbody>{items.map(account => {
           const result = testResults.get(account.id)
-          const checking = pendingIds[0] === account.id
           const pending = pendingIds.includes(account.id)
-          const status = account.status === 'active' && (account.is_busy || checking) ? 'busy' : account.status
+          const status = account.status === 'active' && (account.is_busy || pending) ? 'busy' : account.status
           return <tr key={account.id} className={selectedIds.has(account.id) ? 'is-selected' : undefined}>
             <td className="selection-cell">
               <input type="checkbox" className="request-checkbox" aria-label={'选择账号 ' + account.email}
@@ -98,7 +95,7 @@ export default function AccountsPage() {
             <td className="account-email">{account.email}</td>
             <td>
               <span className={`account-status ${status}`}>{accountLabels[status]}</span>
-              {pending && <small className="account-test-result" role="status">{checking ? '正在测试连接…' : '等待测试…'}</small>}
+              {pending && <small className="account-test-result" role="status">正在测试连接…</small>}
               {result && <small className={`account-test-result ${result.ok ? 'passed' : 'failed'}`}
                 role={result.ok ? 'status' : 'alert'} title={result.ok ? result.message : undefined}>
                 {result.ok ? '认证通过' : result.message}
@@ -108,7 +105,7 @@ export default function AccountsPage() {
             <td>{account.fail_count}</td><td className="date-cell">{formatDate(account.last_used)}</td>
             <td><div className="row-actions">
               <button type="button" className="button" disabled={test.isPending}
-                onClick={() => startTests([account.id])}>{checking ? '测试中…' : '测试连接'}</button>
+                onClick={() => startTests([account.id])}>{pending ? '测试中…' : '测试连接'}</button>
               <button type="button" className="button" disabled={pending} onClick={() => setOpen(account)}>编辑</button>
             </div></td>
           </tr>
