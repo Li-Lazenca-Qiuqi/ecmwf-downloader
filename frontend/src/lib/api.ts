@@ -116,6 +116,8 @@ export const api = {
   aiConfig: () => request<AIConfig>('/api/v1/ai/config'),
   testAIConfig: (body: AIConfigInput & { network_proxy?: NetworkProxyConfig }) => post<{ message: string }>('/api/v1/ai/test', body),
   settings: () => request<Settings>('/api/v1/settings'),
+  settingsAIKey: (signal: AbortSignal) =>
+    request<{ api_key: string }>('/api/v1/settings/ai-key', { signal, cache: 'no-store' }),
   saveSettings: (values: SettingsUpdate, ai_api_key?: string) =>
     request<Settings>('/api/v1/settings', { method: 'PATCH', body: JSON.stringify({ values, ai_api_key }) }),
   testNetworkProxy: (network: NetworkProxyConfig) =>

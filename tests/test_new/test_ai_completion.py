@@ -33,7 +33,7 @@ def field_schema():
     ]}
 
 
-def test_ai_configuration_never_returns_key_and_blank_preserves_key(container):
+def test_ai_configuration_never_returns_key_and_omission_preserves_key(container):
     with TestClient(create_app(container, with_worker=False)) as client:
         initial = client.get('/api/v1/ai/config').json()
         assert not initial['ready'] and not initial['has_api_key']
@@ -45,7 +45,7 @@ def test_ai_configuration_never_returns_key_and_blank_preserves_key(container):
         assert response.json()['ready'] == initial['sdk_available']
         assert 'private-test-value' not in response.text
         assert 'private-test-value' not in (container.settings.config_dir/'app.yaml').read_text()
-        body['api_key'] = ''
+        del body['api_key']
         body['model'] = ' second-model '
         assert client.patch('/api/v1/ai/config', json=body).json()['model'] == 'second-model'
         assert container.secrets.ai_config()['api_key'] == 'private-test-value'
@@ -123,25 +123,49 @@ def test_connection_uses_unsaved_form_values_without_saving(container, monkeypat
     assert container.secrets.path.read_bytes() == before_secrets
 
 
-def test_connection_uses_saved_key_only_at_saved_address_and_sanitizes_error(container, monkeypatch, caplog):
+def test_connection_uses_current_key_only_and_sanitizes_error(container, monkeypatch, caplog):
     container.settings.ai = {'enabled': False, 'base_url': 'https://saved.invalid/v1'}
     container.secrets.update_ai({'api_key': 'synthetic-saved-key'})
     calls = []
 
     def handler(request):
         calls.append(request.url.host)
-        assert request.headers['Authorization'] == 'Bearer synthetic-saved-key'
-        return httpx.Response(404, json={'error': {'message': 'synthetic-saved-key'}})
+        assert request.headers['Authorization'] == 'Bearer synthetic-input-key'
+        return httpx.Response(404, json={'error': {'message': 'synthetic-input-key'}})
 
     mock_sdk(monkeypatch, handler)
     with TestClient(create_app(container, with_worker=False)) as client:
-        body = {'enabled': False, 'model': 'luna'}
-        wrong_address = client.post('/api/v1/ai/test', json={**body, 'base_url': 'https://other.invalid/v1'})
-        assert wrong_address.status_code == 422 and not calls
-        response = client.post('/api/v1/ai/test', json={**body, 'base_url': 'https://saved.invalid/v1/'})
+        body = {'enabled': False, 'model': 'luna', 'base_url': 'https://saved.invalid/v1/'}
+        missing = client.post('/api/v1/ai/test', json=body)
+        assert missing.status_code == 422 and '填写 API Key' in missing.json()['detail'] and not calls
+        response = client.post('/api/v1/ai/test', json={**body, 'api_key': 'synthetic-input-key'})
         assert response.status_code == 503 and '模型或接口' in response.json()['detail']
         assert calls == ['saved.invalid']
-        assert 'synthetic-saved-key' not in response.text + caplog.text
+        assert 'synthetic-input-key' not in response.text + caplog.text
+        assert container.secrets.ai_config()['api_key'] == 'synthetic-saved-key'
+
+
+def test_settings_display_key_and_allow_explicit_clear(container):
+    container.secrets.update_ai({'api_key': 'synthetic-visible-key'})
+    with TestClient(create_app(container, with_worker=False),
+                    base_url='http://127.0.0.1', client=('127.0.0.1', 12345)) as client:
+        key_path = '/api/v1/settings/ai-key'
+        same_origin = {'Sec-Fetch-Site': 'same-origin'}
+        assert client.get(key_path).status_code == 403
+        assert client.get(key_path, headers={**same_origin, 'Host': 'foreign.invalid'}).status_code == 403
+        assert client.get('/api/v1/settings').json()['ai_config']['has_api_key']
+        assert 'synthetic-visible-key' not in client.get('/api/v1/settings').text
+        visible = client.get(key_path, headers=same_origin)
+        assert visible.json() == {'api_key': 'synthetic-visible-key'}
+        assert visible.headers['cache-control'] == 'no-store'
+        enabled = client.patch('/api/v1/settings', json={'values': {'ai': {'enabled': True}}})
+        assert enabled.status_code == 200
+        rejected = client.patch('/api/v1/settings', json={'values': {}, 'ai_api_key': ''})
+        assert rejected.status_code == 422
+        assert client.get(key_path, headers=same_origin).json() == visible.json()
+        cleared = client.patch('/api/v1/settings', json={'values': {'ai': {'enabled': False}}, 'ai_api_key': ''})
+        assert cleared.status_code == 200 and not cleared.json()['ai_config']['has_api_key']
+        assert client.get(key_path, headers=same_origin).json() == {'api_key': ''}
 
 
 @pytest.mark.parametrize(('base_url', 'model'), [
@@ -167,7 +191,7 @@ def test_luna_uses_supported_json_completion_parameters(container, monkeypatch, 
     mock_sdk(monkeypatch, handler)
     with TestClient(create_app(container, with_worker=False)) as client:
         result = client.post('/api/v1/ai/test', json={
-            'enabled': True, 'base_url': base_url, 'model': model,
+            'enabled': True, 'base_url': base_url, 'model': model, 'api_key': 'synthetic-luna-key',
         })
         assert result.status_code == 200
         suggestion = client.post('/api/v1/ai/suggestions', json={

@@ -7,14 +7,19 @@ import NetworkProxySettings from '../features/settings/NetworkProxySettings'
 
 export default function SettingsPage() {
   const query = useQuery({ queryKey: ['settings'], queryFn: api.settings })
+  const key = useQuery({
+    queryKey: ['settings', 'ai-key'],
+    queryFn: ({ signal }) => api.settingsAIKey(signal),
+    gcTime: 0, retry: false,
+  })
   return <section className="page settings-page">
-    {query.isPending && <Loading />}
-    <ErrorNotice error={query.error} />
-    {query.data && <SettingsForm current={query.data} />}
+    {(query.isPending || key.isPending) && <Loading />}
+    <ErrorNotice error={query.error || key.error} />
+    {query.data && key.data && <SettingsForm current={query.data} savedAIKey={key.data.api_key} />}
   </section>
 }
 
-function SettingsForm({ current }: { current: Awaited<ReturnType<typeof api.settings>> }) {
+function SettingsForm({ current, savedAIKey }: { current: Awaited<ReturnType<typeof api.settings>>; savedAIKey: string }) {
   const client = useQueryClient()
   const [proxyDraft, setProxyDraft] = useState<Partial<NetworkProxyConfig>>({})
   const [aiDraft, setAIDraft] = useState<Partial<AIConfigInput>>({})
@@ -22,8 +27,9 @@ function SettingsForm({ current }: { current: Awaited<ReturnType<typeof api.sett
   const [retriesDraft, setRetriesDraft] = useState<string>()
   const proxy = { ...current.network_proxy, ...proxyDraft }
   const network = { mode: proxy.mode, url: proxy.mode === 'manual' ? proxy.url.trim() : current.network_proxy.url }
-  const ai = { ...current.ai_config, ...aiDraft }
+  const ai = { ...current.ai_config, api_key: savedAIKey, ...aiDraft }
   const aiKey = ai.api_key?.trim() ?? ''
+  const aiKeyChanged = aiKey !== savedAIKey
   const pollInterval = pollDraft ?? String(current.requests.poll_interval)
   const maxRetries = retriesDraft ?? String(current.requests.max_retries)
   const monitoring = {
@@ -42,10 +48,11 @@ function SettingsForm({ current }: { current: Awaited<ReturnType<typeof api.sett
     ...(Object.keys(aiChanges).length ? { ai: aiChanges } : {}),
     ...(Object.keys(monitoring).length ? { requests: monitoring } : {}),
   }
-  const dirty = Object.keys(changes).length > 0 || !!aiKey
+  const dirty = Object.keys(changes).length > 0 || aiKeyChanged
   const save = useMutation({
-    mutationFn: (values: SettingsUpdate) => api.saveSettings(values, aiKey || undefined),
+    mutationFn: (values: SettingsUpdate) => api.saveSettings(values, aiKeyChanged ? aiKey : undefined),
     onSuccess: (result, values) => {
+      if (aiKeyChanged) client.setQueryData(['settings', 'ai-key'], { api_key: aiKey })
       client.setQueryData(['settings'], result)
       client.setQueryData(['ai-config'], result.ai_config)
       setProxyDraft({})
@@ -75,7 +82,7 @@ function SettingsForm({ current }: { current: Awaited<ReturnType<typeof api.sett
     <fieldset disabled={save.isPending}>
       <NetworkProxySettings value={proxy} testConfig={network}
         onChange={change => { save.reset(); setProxyDraft(draft => ({ ...draft, ...change })) }} />
-      <AIServiceSettings current={current.ai_config} value={ai} network={network}
+      <AIServiceSettings value={ai} network={network}
         onChange={change => setAIDraft(draft => ({ ...draft, ...change }))} />
       <section className="panel settings-requests" aria-labelledby="settings-requests-title">
         <h2 id="settings-requests-title">请求监视</h2>

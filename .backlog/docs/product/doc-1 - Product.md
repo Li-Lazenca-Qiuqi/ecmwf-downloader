@@ -67,7 +67,7 @@ CDS 与 AI Key 通过 secrets.yaml 单独保存。账号和 AI 服务地址需�
 
 ## AI 服务配置
 
-设置页可编辑 AI 服务地址、模型、API Key、启用及 JSON 模式。API Key 右侧的测试使用当前表单和代理模式发送最小请求。JSON 模式默认开启，测试与补全统一使用 OpenAI 兼容的 Chat Completions 请求格式，令牌上限使用 max_completion_tokens。GPT-6 Luna 采用无推理模式。
+设置页直接填入已保存的 AI API Key，可编辑后统一保存。API Key 右侧的测试使用输入框当前密钥、服务地址、模型、JSON 模式和代理设置发送最小请求。关闭 AI 服务后可清空 API Key 并保存。明文密钥由回环地址上的同源设置页读取。JSON 模式默认开启，测试与补全统一使用 OpenAI 兼容的 Chat Completions 请求格式，令牌上限使用 max_completion_tokens。GPT-6 Luna 采用无推理模式。
 
 ## CLI、HTTP 与设置
 

@@ -102,9 +102,7 @@ class AIService:
         """使用表单草稿发送一个最小请求，验证后不写入设置。"""
         config = self._config()
         if not api_key:
-            if base_url != public_service_url(str(config['base_url'])) or not config.get('api_key'):
-                raise ValueError('请填写当前服务地址对应的 API Key 再测试。')
-            api_key = config['api_key']
+            raise ValueError('请填写 API Key 再测试。')
         config.update(base_url=base_url, model=model, json_mode=json_mode, api_key=api_key)
         content = self._complete(
             config, [{'role': 'user', 'content': '请只返回 JSON 对象 {"ok": true}。'}],

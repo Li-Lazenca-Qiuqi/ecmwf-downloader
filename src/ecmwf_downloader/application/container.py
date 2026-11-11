@@ -60,7 +60,7 @@ class AppContainer:
     def _network_settings(self) -> NetworkProxySettings:
         return self.settings.network_proxy
 
-    def update_settings(self, values: dict[str, Any], *, ai_key: str = "") -> AppSettings:
+    def update_settings(self, values: dict[str, Any], *, ai_key: str | None = None) -> AppSettings:
         """先验证完整配置，保存成功后才更新进程内设置。"""
         if set(values) - {"requests", "ai", "network_proxy"}:
             raise SettingsError("只能修改 requests、ai 或 network_proxy 非敏感设置")
@@ -90,10 +90,14 @@ class AppContainer:
                     runtime[section] = {**runtime[section], **section_values}
                 validate_app_config(data)
                 updated = validate_app_config(runtime)
-                if values.get('ai', {}).get('enabled') and not (ai_key or self.secrets.ai_config().get('api_key')):
-                    raise SettingsError('启用 AI 前请填写 API Key。')
+                if values.get('ai', {}).get('enabled') or ai_key is not None:
+                    stored_ai = self.secrets.ai_config()
+                    enabled = updated.ai.get('enabled', stored_ai.get('enabled', False))
+                    key = stored_ai.get('api_key') if ai_key is None else ai_key
+                    if enabled and not key:
+                        raise SettingsError('请填写 API Key，或关闭 AI 服务后保存。')
                 atomic_write_yaml(path, data)
-                if ai_key:
+                if ai_key is not None:
                     try:
                         self.secrets.update_ai({"api_key": ai_key})
                     except SecretStoreError:

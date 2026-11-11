@@ -263,9 +263,7 @@ def create_app(container: Optional[AppContainer] = None, *, with_worker: bool = 
 
     @app.patch('/api/v1/ai/config')
     def update_ai_configuration(body: AIConfigBody):
-        key = body.api_key.get_secret_value().strip() if body.api_key else ''
-        if body.enabled and not (key or app_container.secrets.ai_config().get('api_key')):
-            return _problem(422, '启用 AI 前请填写 API Key', '配置不完整')
+        key = body.api_key.get_secret_value().strip() if body.api_key is not None else None
         app_container.update_settings({'ai': body.model_dump(exclude={'api_key'})}, ai_key=key)
         return app_container.ai.configuration()
 
@@ -312,9 +310,18 @@ def create_app(container: Optional[AppContainer] = None, *, with_worker: bool = 
         settings = app_container.settings.model_dump(mode="json")
         return {**settings, "ai": public_ai_settings(settings["ai"]), "ai_config": app_container.ai.configuration()}
 
+    @app.get("/api/v1/settings/ai-key", include_in_schema=False)
+    def settings_ai_key(request: Request):
+        loopback_hosts = {"127.0.0.1", "localhost", "::1"}
+        if (request.url.hostname not in loopback_hosts or not request.client
+                or request.client.host not in loopback_hosts or request.headers.get("sec-fetch-site") != "same-origin"):
+            return _problem(403, "请从本机管理台的设置页读取 API Key。", "禁止访问")
+        key = app_container.secrets.ai_config().get("api_key") or ""
+        return JSONResponse({"api_key": key}, headers={"Cache-Control": "no-store"})
+
     @app.patch("/api/v1/settings")
     def patch_settings(body: SettingsPatch):
-        key = body.ai_api_key.get_secret_value().strip() if body.ai_api_key else ''
+        key = body.ai_api_key.get_secret_value().strip() if body.ai_api_key is not None else None
         app_container.update_settings(body.values, ai_key=key)
         return get_settings()
 

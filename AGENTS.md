@@ -38,7 +38,7 @@
 - 请求参数 data_format/download_format 为源站产物格式与封装，仍保留，不代表本地下载开关。
 - 结果 URL/文件名/大小/类型来自真实元数据，有效期未知留空；支持复制、CLI/API 输出与手动更新，失效不自动重提。不将完整签名链接或 API Key 写普通事件/日志。
 - requests 配置保存前校验，app.yaml 用写锁串行合并并原子替换。同进程 PATCH 对后续领取和查询安排生效，已开始操作和已安排的等待照常执行；默认重试上限用于新建请求。独立 CLI 保存后由后台服务重启读取。CLI/API 不接受输出目录、覆盖或旧 enqueue/run 下载入口。
-- 凭据仅放 secrets.yaml，Linux 用 0600、文件锁及原子替换；Windows 原生保护仍待补齐，日志/DTO/CLI 不输出密钥。
+- 凭据仅放 secrets.yaml，Linux 用 0600、文件锁及原子替换。AI API Key 在本机同源设置页直接显示。日志、CLI 与常规 API 隐藏密钥。Windows 原生保护待验收。
 - 不引入 Textual、旧 src/ui、固定 ERA5 字段、旧 YAML/JSON 任务导入、暂停/预约/可靠数据断点续传或展示性控制。
 
 ## 界面

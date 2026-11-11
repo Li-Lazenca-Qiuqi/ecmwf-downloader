@@ -1,16 +1,15 @@
 import { useMutation } from '@tanstack/react-query'
 import { Loader2, Radio, Sparkles } from 'lucide-react'
-import { api, type AIConfig, type AIConfigInput, type NetworkProxyConfig } from '../../lib/api'
+import { api, type AIConfigInput, type NetworkProxyConfig } from '../../lib/api'
 import { ErrorNotice } from '../../components'
 
 type Props = {
-  current: AIConfig
   value: AIConfigInput
   network: NetworkProxyConfig
   onChange: (change: Partial<AIConfigInput>) => void
 }
 
-export default function AIServiceSettings({ current, value, network, onChange }: Props) {
+export default function AIServiceSettings({ value, network, onChange }: Props) {
   const body = {
     enabled: value.enabled,
     base_url: value.base_url.trim(),
@@ -20,8 +19,7 @@ export default function AIServiceSettings({ current, value, network, onChange }:
     network_proxy: network,
   }
   const test = useMutation({ mutationFn: () => api.testAIConfig(body), gcTime: 0 })
-  const savedKeyMatches = current.has_api_key && body.base_url.replace(/\/+$/, '') === current.base_url
-  const canTest = body.base_url && body.model && (body.api_key || savedKeyMatches)
+  const canTest = body.base_url && body.model && body.api_key
     && (network.mode !== 'manual' || !!network.url)
 
   const edit = (change: Partial<AIConfigInput>) => {
@@ -52,7 +50,7 @@ export default function AIServiceSettings({ current, value, network, onChange }:
         <div className="ai-key-controls">
           <input id="settings-ai-key" aria-label="AI API Key" type="text" autoComplete="off" spellCheck={false} autoCapitalize="off"
             value={value.api_key ?? ''} onChange={event => edit({ api_key: event.target.value })}
-            placeholder="输入 API Key" required={value.enabled && !current.has_api_key} />
+            placeholder="输入 API Key" required={value.enabled} />
           <button type="button" className="button" disabled={test.isPending || !canTest} onClick={() => test.mutate()}>
             {test.isPending ? <Loader2 size={15} className="spin" /> : <Radio size={15} />}测试连接
           </button>
