@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { Link, useSearchParams } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { ChevronLeft, ChevronRight, Plus, RefreshCw, Search, X, Copy, FileText, Trash2 } from 'lucide-react'
+import { ChevronLeft, ChevronRight, Plus, RefreshCw, Search, X, Copy, RotateCw, Trash2 } from 'lucide-react'
 import { api, type Task, type Summary } from '../lib/api'
 import { ErrorNotice, Loading, StatusBadge, formatBytes, formatDate, statusLabels } from '../components'
 import CardSelect from '../CardSelect'
@@ -120,27 +120,30 @@ export default function QueuePage() {
     else next.add(id)
     return next
   })
-  const actions = (task: Task) => <div className="row-actions">
-    {(activeStates.includes(task.status) || (task.status === 'failed' && !!task.remote_request_id && !['failed','rejected','dismissed','expired'].includes(task.remote_status || ''))) && <button type="button" className="button danger" disabled={action.isPending} onClick={() => action.mutate({ id: task.id, operation: 'cancel' })}>取消</button>}
-    {['failed', 'expired', 'cancelled'].includes(task.status) && <button type="button" className="button" disabled={action.isPending} onClick={() => action.mutate({ id: task.id, operation: 'retry' })}>{retryLabel(task)}</button>}
-    {task.status === 'completed' && <>
-      <button type="button" className="task-icon-button" title="复制链接" aria-label="复制链接"
+  const actions = (task: Task) => {
+    const retry = retryLabel(task)
+    const resubmit = retry === '重新提交'
+    return <div className="row-actions">
+      {(activeStates.includes(task.status) || (task.status === 'failed' && !!task.remote_request_id && !['failed','rejected','dismissed','expired'].includes(task.remote_status || ''))) && <button type="button" className="button danger" disabled={action.isPending} onClick={() => action.mutate({ id: task.id, operation: 'cancel' })}>取消</button>}
+      {['failed', 'expired', 'cancelled'].includes(task.status) && <button type="button"
+        className={resubmit ? 'task-icon-button' : 'button'} title={resubmit ? retry : undefined}
+        aria-label={resubmit ? retry : undefined} disabled={action.isPending}
+        onClick={() => action.mutate({ id: task.id, operation: 'retry' })}>
+        {resubmit ? <RotateCw size={17} aria-hidden="true" /> : retry}
+      </button>}
+      {task.status === 'completed' && <button type="button" className="task-icon-button" title="复制链接" aria-label="复制链接"
         disabled={!task.results.length} onClick={() => void links.copy(task.results.map(asset => asset.url))}>
         <Copy size={17} aria-hidden="true" />
-      </button>
-      <button type="button" className="task-icon-button" title="查看详情" aria-label="查看详情" aria-haspopup="dialog"
-        onClick={() => setParams({ selected: task.id })}>
-        <FileText size={17} aria-hidden="true" />
-      </button>
-    </>}
-    {canDelete(task) && <button type="button" className="task-icon-button danger" title="删除请求记录"
-      aria-label="删除请求记录" disabled={action.isPending} onClick={() => {
-        if (window.confirm('删除这条本地请求记录？删除后将无法在队列中查看它的详情和结果链接。')) {
-          action.mutate({ id: task.id, operation: 'delete' })
-        }
-      }}><Trash2 size={16} aria-hidden="true" /></button>}
-    {task.status === 'submission_unknown' && <button type="button" className="button" onClick={() => setParams({ selected: task.id })}>核实提交</button>}
-  </div>
+      </button>}
+      {canDelete(task) && <button type="button" className="task-icon-button danger" title="删除请求记录"
+        aria-label="删除请求记录" disabled={action.isPending} onClick={() => {
+          if (window.confirm('删除这条本地请求记录？删除后将无法在队列中查看它的详情和结果链接。')) {
+            action.mutate({ id: task.id, operation: 'delete' })
+          }
+        }}><Trash2 size={16} aria-hidden="true" /></button>}
+      {task.status === 'submission_unknown' && <button type="button" className="button" onClick={() => setParams({ selected: task.id })}>核实提交</button>}
+    </div>
+  }
   return <section className="page queue-page">
     <div className="page-heading"><div><h1>请求队列</h1><p>自动提交并监视远端处理，结果就绪后复制链接到下载器。</p></div><Link className="button primary" to="/requests/new"><Plus size={17} />提交请求</Link></div>
     <div className="queue-summary" aria-label="队列统计">
@@ -181,7 +184,7 @@ export default function QueuePage() {
           <tbody>{items.map(task => <tr key={task.id} className={selectedIds.has(task.id) ? 'is-selected' : undefined}>
             <td className="selection-cell"><input type="checkbox" className="request-checkbox" aria-label={'选择请求 ' + requestTitle(task)} checked={selectedIds.has(task.id)} onChange={() => toggleSelection(task.id)} /></td>
             <td>
-              <button type="button" className="text-button filename" onClick={() => setParams({ selected: task.id })}>{requestTitle(task)}</button>
+              <button type="button" className="text-button filename" aria-haspopup="dialog" onClick={() => setParams({ selected: task.id })}>{requestTitle(task)}</button>
               <small>{directSources.get(task.dataset_id) ?? 'CDS'} · {task.dataset_id}</small>
             </td>
             <td><StatusBadge status={task.status} /><small>{statusDetail(task, summary.data)}</small></td>
