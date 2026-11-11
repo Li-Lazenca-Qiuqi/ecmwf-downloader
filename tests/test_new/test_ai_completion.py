@@ -83,9 +83,16 @@ def test_enable_without_key_is_rejected_before_writing(container):
 
 
 def mock_sdk(monkeypatch, handler):
+    monkeypatch.delenv('WSL_DISTRO_NAME', raising=False)
     openai = pytest.importorskip('openai')
     real_client = openai.OpenAI
-    monkeypatch.setattr(openai, 'OpenAI', lambda **kwargs: real_client(**kwargs, http_client=httpx.Client(transport=httpx.MockTransport(handler))))
+    def client(**kwargs):
+        configured = kwargs.pop('http_client', None)
+        if configured is not None:
+            configured.close()
+        return real_client(**kwargs, http_client=httpx.Client(transport=httpx.MockTransport(handler)))
+
+    monkeypatch.setattr(openai, 'OpenAI', client)
 
 
 @pytest.mark.parametrize('json_mode', [True, False])

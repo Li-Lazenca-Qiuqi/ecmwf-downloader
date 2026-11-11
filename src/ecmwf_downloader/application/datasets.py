@@ -8,8 +8,9 @@ import math
 from datetime import datetime, timezone
 import threading
 import time
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 import requests
+from ecmwf_downloader.config import NetworkProxySettings
 from ecmwf_downloader.domain.schema import finish_schema
 
 from ecmwf_downloader.infrastructure.catalogue import fetch_catalogue
@@ -18,7 +19,8 @@ from ecmwf_downloader.infrastructure.mirrors import ARCO_ID, NCAR_ID, GDEX_ID, F
 
 
 class DatasetService:
-    def __init__(self):
+    def __init__(self, network: Callable[[], NetworkProxySettings | None] = lambda: None):
+        self._network = network
         self._cache: dict[tuple, tuple[float, dict]] = {}
         self._lock = threading.Lock()
         self._catalogue_lock = threading.Lock()
@@ -38,7 +40,7 @@ class DatasetService:
                 result = {**copy.deepcopy(cached[1]), 'source': 'cache', 'stale': False}
             else:
                 try:
-                    result = {'items': fetch_catalogue(), 'source': 'online', 'stale': False,
+                    result = {'items': fetch_catalogue(self._network()), 'source': 'online', 'stale': False,
                               'error': None, 'fetched_at': datetime.now(timezone.utc).isoformat()}
                     self._catalogue_cache = (time.monotonic(), copy.deepcopy(result))
                 except Exception:
@@ -53,6 +55,12 @@ class DatasetService:
         result['total'] = len(result['items'])
         return result
 
+    def _provider(self, account: dict[str, Any]) -> DatastoresProvider:
+        return DatastoresProvider(
+            url=account.get('url', 'https://cds.climate.copernicus.eu/api'),
+            key=account['key'], network=self._network(),
+        )
+
     def schema(self, dataset_id: str, account: Optional[dict[str, Any]] = None, *, refresh: bool = False, prefix: str = DEFAULT_PREFIX) -> dict[str, Any]:
         if dataset_id == ARCO_ID: raise ValueError('ARCO 本地导出已移除')
         key = (dataset_id, prefix if dataset_id in FILE_MIRROR_IDS else (account or {}).get('url'), (account or {}).get('id') if dataset_id not in MIRROR_IDS else None)
@@ -62,13 +70,13 @@ class DatasetService:
             return {**copy.deepcopy(cached[1]), 'source': 'cache', 'stale': False}
         try:
             if dataset_id == NCAR_ID:
-                schema = ncar_schema(prefix)
+                schema = ncar_schema(prefix, network=self._network())
             elif dataset_id == GDEX_ID:
-                schema = gdex_schema(prefix)
+                schema = gdex_schema(prefix, network=self._network())
             else:
                 if not account or not account.get('key'):
                     raise ValueError('没有可用账号')
-                schema = DatastoresProvider(url=account.get('url', 'https://cds.climate.copernicus.eu/api'), key=account['key']).schema(dataset_id)
+                schema = self._provider(account).schema(dataset_id)
             result = {**finish_schema(schema), 'source': 'online', 'stale': False, 'error': None,
                       'fetched_at': datetime.now(timezone.utc).isoformat()}
             with self._lock:
@@ -98,7 +106,7 @@ class DatasetService:
             return {'constraints': {}, 'source': 'not_applicable', 'error': None}
         try:
             if not account or not account.get('key'): raise ValueError('没有可用账号')
-            values = DatastoresProvider(url=account.get('url', 'https://cds.climate.copernicus.eu/api'), key=account['key']).constraints(dataset_id, selection)
+            values = self._provider(account).constraints(dataset_id, selection)
             return {'constraints': values, 'source': 'online', 'error': None}
         except Exception:
             return {'constraints': {}, 'source': 'error',
@@ -111,7 +119,7 @@ class DatasetService:
         if not account or not account.get('key'):
             return {'source': 'error', 'error': '请先添加可用 CDS 账号，再刷新请求规模。'}
         try:
-            result = DatastoresProvider(url=account['url'], key=account['key']).estimate_costs(dataset_id, selection)
+            result = self._provider(account).estimate_costs(dataset_id, selection)
             # 保留官方规模单位；cost 不是下载文件的字节数。
             cost = result['cost']
             limit = result.get('limit')

@@ -4,11 +4,11 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import Annotated, Any, Dict, Optional
+from typing import Annotated, Any, Dict, Literal, Optional, Self
 from urllib.parse import urlsplit
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, FiniteFloat, ValidationError, field_validator
+from pydantic import BaseModel, ConfigDict, Field, FiniteFloat, ValidationError, field_validator, model_validator
 
 from ecmwf_downloader.infrastructure.yaml_file import atomic_write_yaml, file_write_lock
 
@@ -80,6 +80,33 @@ class RequestSettings(BaseModel):
     poll_interval: float = Field(default=5, ge=1, le=3600, strict=True, allow_inf_nan=False)
 
 
+def network_proxy_url(value: str) -> str:
+    try:
+        address = service_url(value)
+        if not urlsplit(address).path and not any(char.isspace() for char in address):
+            return address
+    except ValueError:
+        pass
+    raise ValueError('代理地址需要是无凭据的 HTTP(S) 地址，例如 http://主机:端口。')
+
+
+class NetworkProxySettings(BaseModel):
+    model_config = ConfigDict(extra='forbid', strict=True)
+    mode: Literal['direct', 'system', 'manual'] = 'system'
+    url: str = ''
+
+    @field_validator('url')
+    @classmethod
+    def validate_url(cls, value: str) -> str:
+        return network_proxy_url(value) if value.strip() else ''
+
+    @model_validator(mode='after')
+    def require_enabled_url(self) -> Self:
+        if self.mode == 'manual' and not self.url:
+            raise ValueError('手动代理需要填写地址。')
+        return self
+
+
 class AppSettings(BaseModel):
     """Non-secret settings persisted in ``config/app.yaml``."""
 
@@ -87,6 +114,7 @@ class AppSettings(BaseModel):
     config_dir: Path = Path("config")
     requests: RequestSettings = Field(default_factory=RequestSettings)
     ai: Dict[str, Any] = Field(default_factory=dict)
+    network_proxy: NetworkProxySettings = Field(default_factory=NetworkProxySettings)
 
     @field_validator("database_path", "config_dir", mode="before")
     @classmethod
@@ -137,13 +165,23 @@ def parse_app_config(content: bytes) -> dict[str, Any]:
         return {}
     if not isinstance(data, dict):
         raise SettingsError("应用配置必须是 YAML 对象。")
+    legacy_proxy = data.pop('cds_proxy', None)
+    if legacy_proxy is not None and 'network_proxy' not in data:
+        if not isinstance(legacy_proxy, dict):
+            raise SettingsError('网络代理配置无效。')
+        data['network_proxy'] = {
+            'mode': 'manual' if legacy_proxy.get('enabled') else 'direct',
+            'url': legacy_proxy.get('url', ''),
+        }
     return data
 
 
 def validate_app_config(data: dict[str, Any]) -> AppSettings:
     try:
         return AppSettings.model_validate(data).resolve_relative_paths()
-    except ValidationError:
+    except ValidationError as error:
+        if any(item['loc'][0:1] == ('network_proxy',) for item in error.errors(include_input=False)):
+            raise SettingsError('网络代理配置无效。手动模式需要无凭据的 HTTP(S) 代理地址。') from None
         raise SettingsError("应用配置无效，请检查路径或请求调度参数的类型与范围。") from None
 
 

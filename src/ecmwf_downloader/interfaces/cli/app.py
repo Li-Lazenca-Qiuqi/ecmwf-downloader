@@ -457,6 +457,8 @@ def config_set(ctx: typer.Context, key: str, value: str):
         "ai.model",
         "ai.temperature",
         "ai.timeout",
+        "network_proxy.mode",
+        "network_proxy.url",
     }
     if key not in allowed:
         raise typer.BadParameter(f"仅支持: {', '.join(sorted(allowed))}")

@@ -53,7 +53,7 @@ def test_incomplete_catalogue_is_not_returned_as_complete(monkeypatch):
 
 def test_cache_search_by_name_and_id_and_safe_stale_fallback(monkeypatch):
     calls = []
-    def fetch():
+    def fetch(_proxy_url):
         calls.append(1)
         return [{'id':'reanalysis-demo', 'title':'Air Temperature', 'source':'CDS'}, {'id':'other','title':'Rain','source':'CDS'}]
     monkeypatch.setattr(datasets, 'fetch_catalogue', fetch)
@@ -64,7 +64,7 @@ def test_cache_search_by_name_and_id_and_safe_stale_fallback(monkeypatch):
     result['items'].clear()
     assert service.list('REANALYSIS-DEMO')['total'] == 1
     assert len(calls) == 1
-    def fail(): raise RuntimeError('private error detail')
+    def fail(_proxy_url): raise RuntimeError('private error detail')
     monkeypatch.setattr(datasets, 'fetch_catalogue', fail)
     stale = service.list(refresh=True)
     assert stale['source'] == 'cache' and stale['stale'] and stale['total'] == 2
@@ -74,7 +74,7 @@ def test_cache_search_by_name_and_id_and_safe_stale_fallback(monkeypatch):
 
 
 def test_http_and_cli_expose_catalogue_search_without_credentials(tmp_path, monkeypatch):
-    monkeypatch.setattr(datasets, 'fetch_catalogue', lambda: [{'id':'online-only-id', 'title':'Official Catalogue Entry', 'source':'CDS'}])
+    monkeypatch.setattr(datasets, 'fetch_catalogue', lambda _proxy_url: [{'id':'online-only-id', 'title':'Official Catalogue Entry', 'source':'CDS'}])
     settings = AppSettings(database_path=tmp_path/'db.sqlite3', config_dir=tmp_path/'config')
     container = AppContainer(settings)
     try:

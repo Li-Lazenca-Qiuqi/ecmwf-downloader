@@ -13,10 +13,11 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 
 from ecmwf_downloader.application.container import AppContainer
-from ecmwf_downloader.config import SettingsIOError, public_ai_settings, service_url
+from ecmwf_downloader.config import NetworkProxySettings, SettingsIOError, public_ai_settings, service_url
 from ecmwf_downloader.infrastructure.secrets import SecretStoreError
 from ecmwf_downloader.infrastructure.mirrors import DEFAULT_PREFIX, MIRROR_IDS
 from ecmwf_downloader.infrastructure.cds import ProviderError
+from ecmwf_downloader.infrastructure.catalogue import check_network
 from ecmwf_downloader.application.worker import RequestScheduler
 from ecmwf_downloader.domain.models import AccountStatus, TaskStatus, SplitStrategy
 from ecmwf_downloader.interfaces.http.schemas import (
@@ -25,6 +26,7 @@ from ecmwf_downloader.interfaces.http.schemas import (
     AccountUpdateBody,
     AISuggestionBody,
     AIConfigBody,
+    AIConnectionTestBody,
     BatchBody,
     CostingBody,
     PreviewBody,
@@ -268,11 +270,12 @@ def create_app(container: Optional[AppContainer] = None, *, with_worker: bool = 
         return app_container.ai.configuration()
 
     @app.post("/api/v1/ai/test")
-    def test_ai_connection(body: AIConfigBody):
+    def test_ai_connection(body: AIConnectionTestBody):
         key = body.api_key.get_secret_value().strip() if body.api_key else ''
         try:
             app_container.ai.test_connection(
                 base_url=body.base_url, model=body.model, json_mode=body.json_mode, api_key=key,
+                network=body.network_proxy,
             )
         except RuntimeError as exc:
             return _problem(503, str(exc), "AI 服务不可用")
@@ -313,6 +316,11 @@ def create_app(container: Optional[AppContainer] = None, *, with_worker: bool = 
     def patch_settings(body: SettingsPatch):
         settings = app_container.update_settings(body.values).model_dump(mode="json")
         return {**settings, "ai": public_ai_settings(settings["ai"])}
+
+    @app.post("/api/v1/settings/network-proxy/test")
+    def test_network_proxy(body: NetworkProxySettings):
+        ok, message = check_network(body)
+        return {"ok": ok, "message": message}
 
     @app.get("/api/v1/events")
     async def events(request: Request, last_event_id: int = Query(0, alias="last_event_id"), header_event_id: Optional[str] = Header(None, alias="Last-Event-ID")):

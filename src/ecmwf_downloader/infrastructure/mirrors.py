@@ -8,9 +8,9 @@ from typing import Any
 from urllib.parse import quote
 from xml.etree import ElementTree as ET
 
-import requests
-
+from ecmwf_downloader.config import NetworkProxySettings
 from ecmwf_downloader.infrastructure.cds import ProviderError
+from ecmwf_downloader.infrastructure.network import request_session
 
 NCAR_ID = 'mirror-ncar-era5'
 GDEX_ID = 'mirror-ncar-gdex-era5'
@@ -35,13 +35,13 @@ def field(name: str, label: str, kind: str, *, values: list | None = None, requi
             'options': [{'value': value, 'label': str(value)} for value in values or []]}
 
 
-def ncar_schema(prefix: str = DEFAULT_PREFIX) -> dict:
+def ncar_schema(prefix: str = DEFAULT_PREFIX, *, network: NetworkProxySettings | None = None) -> dict:
     if not re.fullmatch(r'e5\.[A-Za-z0-9_.-]+/\d{6}/', prefix):
         raise ValueError('NCAR 目录需要形如 e5.oper.an.sfc/202401/，仅列出指定产品的一个月')
     options = []
     token = None
     seen = set()
-    with requests.Session() as session:
+    with request_session(network) as session:
         while True:
             params = {'list-type': '2', 'prefix': prefix, 'max-keys': '1000'}
             if token: params['continuation-token'] = token
@@ -71,13 +71,14 @@ def ncar_schema(prefix: str = DEFAULT_PREFIX) -> dict:
             'description': '匿名访问，无需 CDS 账号；返回已发布文件链接。', 'prefix': prefix, 'source_url': NCAR_URL}
 
 
-def gdex_schema(prefix: str = DEFAULT_PREFIX) -> dict:
+def gdex_schema(prefix: str = DEFAULT_PREFIX, *, network: NetworkProxySettings | None = None) -> dict:
     if not re.fullmatch(r'e5\.[A-Za-z0-9_.-]+/\d{6}/', prefix):
         raise ValueError('NCAR 目录需要形如 e5.oper.an.sfc/202401/')
     catalog_url = f'{GDEX_CATALOG_URL}/{prefix}catalog.xml'
-    response = requests.get(catalog_url, timeout=(10, 30))
-    response.raise_for_status()
-    root = ET.fromstring(response.content)
+    with request_session(network) as session:
+        response = session.get(catalog_url, timeout=(10, 30))
+        response.raise_for_status()
+        root = ET.fromstring(response.content)
     ns = {'t': 'http://www.unidata.ucar.edu/namespaces/thredds/InvCatalog/v1.0'}
     options = []
     seen = set()
@@ -110,13 +111,16 @@ def gdex_schema(prefix: str = DEFAULT_PREFIX) -> dict:
 
 
 class MirrorProvider:
+    def __init__(self, network: NetworkProxySettings | None = None):
+        self.network = network
+
     def results(self, dataset_id, payload):
         key = ncar_key(payload['object_key'])
         base = GDEX_URL if dataset_id == GDEX_ID else NCAR_URL
         url = base + '/' + quote(key, safe='/')
         try:
             # HEAD 仅获取响应头，不读取科学数据文件体。
-            with requests.head(url, allow_redirects=True, timeout=(10, 20)) as response:
+            with request_session(self.network) as session, session.head(url, allow_redirects=True, timeout=(10, 20)) as response:
                 response.raise_for_status()
                 if response.headers.get('Content-Type', '').startswith('text/html'):
                     raise ProviderError('镜像返回网页，当前文件链接不可用')

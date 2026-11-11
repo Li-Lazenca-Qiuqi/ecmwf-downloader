@@ -1,4 +1,6 @@
 from pathlib import Path
+from contextlib import nullcontext
+from types import SimpleNamespace
 import pytest
 from ecmwf_downloader.infrastructure import mirrors
 from ecmwf_downloader.application.datasets import DatasetService
@@ -18,7 +20,7 @@ def test_gdex_lists_own_catalogue_and_rejects_foreign_paths(monkeypatch):
         def raise_for_status(self): pass
     calls = []
     def get(url, **kwargs): calls.append(url);return Response()
-    monkeypatch.setattr(mirrors.requests, 'get', get)
+    monkeypatch.setattr(mirrors, 'request_session', lambda _network: nullcontext(SimpleNamespace(get=get)))
     result = mirrors.gdex_schema()
     assert calls == [f'{mirrors.GDEX_CATALOG_URL}/{mirrors.DEFAULT_PREFIX}catalog.xml']
     assert result['collection_id'] == mirrors.GDEX_ID and result['source_url'] == mirrors.GDEX_URL
@@ -40,7 +42,7 @@ def test_ncar_complete_listing_deduplicates_pages_and_keeps_sizes(monkeypatch):
                 content=xml.encode()
                 def raise_for_status(self): pass
             return Response()
-    monkeypatch.setattr(mirrors.requests,'Session',Session)
+    monkeypatch.setattr(mirrors, 'request_session', lambda _network: Session())
     result=mirrors.ncar_schema()
     assert result['fields'][0]['options'][0]['size_bytes']==100
     assert len(result['fields'][0]['options'])==1
@@ -59,8 +61,9 @@ def test_mirror_links_only_use_head_never_file_get(monkeypatch,source,base):
         def raise_for_status(self): pass
     def head(url,**kwargs):
         calls.append(url);return Response()
-    monkeypatch.setattr(mirrors.requests,'head',head)
-    monkeypatch.setattr(mirrors.requests,'get',lambda *args,**kwargs:pytest.fail('读取文件体'))
+    monkeypatch.setattr(mirrors, 'request_session', lambda _network: nullcontext(SimpleNamespace(
+        head=head, get=lambda *args, **kwargs: pytest.fail('读取文件体'),
+    )))
     result=mirrors.MirrorProvider().results(source,{'object_key':KEY})
     assert calls==[base+'/'+KEY] and result[0]['size']==123
     assert not hasattr(mirrors.MirrorProvider,'download')

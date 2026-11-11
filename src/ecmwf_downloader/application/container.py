@@ -12,6 +12,7 @@ from ecmwf_downloader.application.datasets import DatasetService
 from ecmwf_downloader.application.services import AccountService, TaskService, TemplateService
 from ecmwf_downloader.config import (
     AppSettings,
+    NetworkProxySettings,
     PublicAISettings,
     SettingsError,
     SettingsIOError,
@@ -49,17 +50,20 @@ class AppContainer:
         self.account_state_repository = AccountStateRepository(self.database)
         self.template_repository = TemplateRepository(self.database)
         self.tasks = TaskService(self.settings, self.tasks_repository)
-        self.accounts = AccountService(self.secrets, self.account_state_repository)
+        self.accounts = AccountService(self.secrets, self.account_state_repository, network=self._network_settings)
         self.templates = TemplateService(self.template_repository)
-        self.datasets = DatasetService()
+        self.datasets = DatasetService(network=self._network_settings)
         self.tasks.datasets = self.datasets
         self.tasks.datasets_account = self.secrets.get_account
         self.ai = AIService(self.settings, self.secrets)
 
+    def _network_settings(self) -> NetworkProxySettings:
+        return self.settings.network_proxy
+
     def update_settings(self, values: dict[str, Any], *, ai_key: str = "") -> AppSettings:
         """先验证完整配置，保存成功后才更新进程内设置。"""
-        if set(values) - {"requests", "ai"}:
-            raise SettingsError("只能修改 requests 或 ai 非敏感设置")
+        if set(values) - {"requests", "ai", "network_proxy"}:
+            raise SettingsError("只能修改 requests、ai 或 network_proxy 非敏感设置")
         if any(not isinstance(section, dict) for section in values.values()):
             raise SettingsError("设置分组必须是对象")
         if "ai" in values:

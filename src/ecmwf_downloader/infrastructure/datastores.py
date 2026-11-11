@@ -5,8 +5,9 @@ from __future__ import annotations
 import html
 import re
 from typing import Any
-from ecmwf_downloader.config import service_url
+from ecmwf_downloader.config import NetworkProxySettings, service_url
 from ecmwf_downloader.domain.schema import finish_schema
+from ecmwf_downloader.infrastructure.network import request_session
 
 
 def plain_text(value: Any) -> str:
@@ -14,10 +15,10 @@ def plain_text(value: Any) -> str:
 
 
 class DatastoresProvider:
-    def __init__(self, *, url: str, key: str):
+    def __init__(self, *, url: str, key: str, network: NetworkProxySettings | None = None):
         from ecmwf.datastores import Client
         self.client = Client(url=service_url(url), key=key, timeout=(10, 25), maximum_tries=1,
-                             progress=False, log_callback=lambda *args: None)
+                             progress=False, session=request_session(network), log_callback=lambda *args: None)
 
     def schema(self, dataset_id: str) -> dict[str, Any]:
         collection = self.client.get_collection(dataset_id)

@@ -3,7 +3,7 @@ id: doc-1
 title: Product
 type: specification
 created_date: '2026-10-25T08:18:00Z'
-updated_date: '2026-11-09T15:51:00Z'
+updated_date: '2026-11-11T06:19:00Z'
 ---
 # ECMWF Downloader 产品说明
 
@@ -70,6 +70,9 @@ CDS 与 AI Key 通过 secrets.yaml 单独保存。账号和 AI 服务地址需�
 设置首页的 AI 服务卡片直接编辑服务地址、模型和 API Key，并提供测试与保存操作。API Key 输入可直接阅读，已保存的 Key 由后端保管。测试连接使用当前表单的服务地址、模型、Key 和 JSON 模式发送最小请求，结果显示在表单中。测试不保存配置，更改地址后需要提供对应的 Key。卡片标题栏的启用开关和表单的 JSON 开关独立保存，地址、模型和 Key 的编辑值由保存配置按钮提交。启用 AI 参数补全控制提交页能否生成建议。JSON 模式默认开启并要求服务返回 JSON 对象，关闭后应用仍校验建议格式。测试与补全统一使用 OpenAI 兼容的 Chat Completions 请求格式，令牌上限使用 max_completion_tokens。GPT-6 Luna 采用无推理模式。
 
 ## CLI、HTTP 与设置
+
+网络代理覆盖 CDS、NCAR 镜像和 AI 的出站请求。可选择关闭、使用系统代理或填写无凭据的 HTTP(S) 地址。系统模式读取后端环境或 Windows 系统代理。WSL 未继承代理时读取 Windows Internet 设置，将 NAT 下的回环代理地址映射到 Windows 网关。网络测试接口访问 CDS 公开目录。旧 cds_proxy 配置在读取时迁移到 network_proxy。
+
 
 继续使用 ecmwf 命令和原包名；task create/watch/cancel/retry、request preview/compile 均调用应用服务。新增 task links、task refresh、task attach；不保留输出目录、覆盖、旧 enqueue/run 下载入口。
 HTTP /api/v1/tasks 现在表示新请求记录；保留预览、账号、模板、字段、约束、costing、AI、settings 与 SSE。任务新增 links、refresh、attach；目录浏览 API 已移除，未知 API 不返回 SPA 页面。

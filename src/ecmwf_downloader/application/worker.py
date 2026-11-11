@@ -27,13 +27,13 @@ class RequestEngine:
                 if task.status == TaskStatus.CANCELLING:
                     tasks.finish_cancelled(task_id)
                 else:
-                    assets = MirrorProvider().results(task.dataset_id, task.request_payload)
+                    assets = MirrorProvider(self.container.settings.network_proxy).results(task.dataset_id, task.request_payload)
                     tasks.apply_remote(task_id, 'successful', assets, self.container.settings.requests.poll_interval)
                 return
             account = self.container.secrets.get_account(task.account_id) if task.account_id else None
             if not account:
                 raise ProviderError('提交账号已不可用，请恢复原账号；不会改用其他账号查询。')
-            provider = CDSProvider(account)
+            provider = CDSProvider(account, network=self.container.settings.network_proxy)
             if task.status == TaskStatus.SUBMITTING:
                 submission_id = provider.submit(task.dataset_id, task.request_payload)
                 tasks.record_submission(task_id, submission_id, self.container.settings.requests.poll_interval)

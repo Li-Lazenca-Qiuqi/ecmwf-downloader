@@ -6,7 +6,8 @@ from urllib.parse import unquote, urlsplit
 from ecmwf.datastores import Client as DatastoresClient
 import requests
 
-from ecmwf_downloader.config import service_url
+from ecmwf_downloader.config import NetworkProxySettings, service_url
+from ecmwf_downloader.infrastructure.network import request_session
 
 class ProviderError(RuntimeError):
     pass
@@ -18,17 +19,18 @@ class SubmissionUncertain(ProviderError):
     pass
 
 class CDSProvider:
-    def __init__(self, account: dict[str, Any]):
+    def __init__(self, account: dict[str, Any], *, network: NetworkProxySettings | None = None):
         if not account or not account.get("key"):
             raise ProviderError("账号缺少 API Key")
         self.account = account
+        self.network = network
 
     def _client(self):
         return DatastoresClient(
             url=service_url(self.account.get("url", "https://cds.climate.copernicus.eu/api")),
             key=self.account["key"], timeout=(10, 20), maximum_tries=1,
             cleanup=False, progress=False, sleep_max=1, retry_after=1,
-            log_callback=lambda *args: None,
+            session=request_session(self.network), log_callback=lambda *args: None,
         )
 
     def submit(self, dataset_id, payload):

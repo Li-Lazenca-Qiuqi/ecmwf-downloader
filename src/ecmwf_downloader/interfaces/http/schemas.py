@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator
-from ecmwf_downloader.config import service_url
+from ecmwf_downloader.config import NetworkProxySettings, service_url
 
 from ecmwf_downloader.domain.models import AccountData, SplitStrategy, TaskData, TaskStatus
 
@@ -89,6 +89,10 @@ class AIConfigBody(BaseModel):
 class TemplateBody(BaseModel):
     name: str
     payload: dict[str, Any]
+
+
+class AIConnectionTestBody(AIConfigBody):
+    network_proxy: NetworkProxySettings | None = None
 
 
 class SettingsPatch(BaseModel):

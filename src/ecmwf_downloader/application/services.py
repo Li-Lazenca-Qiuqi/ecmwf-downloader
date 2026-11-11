@@ -6,12 +6,12 @@ from pathlib import Path
 import json
 import re
 import threading
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 from uuid import uuid4
 
 from ecmwf_downloader.application.request_builder import PlannedTask, RequestBuilder
 from ecmwf_downloader.application.request_compiler import compile_request
-from ecmwf_downloader.config import AppSettings, public_service_url, service_url
+from ecmwf_downloader.config import AppSettings, NetworkProxySettings, public_service_url, service_url
 from ecmwf_downloader.domain.models import AccountData, AccountStatus, SplitStrategy, TaskData, TaskStatus
 from ecmwf_downloader.infrastructure.cds import CDSProvider
 from ecmwf_downloader.infrastructure.repositories import (
@@ -129,7 +129,9 @@ class TaskService:
         if task.status != TaskStatus.SUBMISSION_UNKNOWN:
             raise ValueError('仅提交结果不明确的请求可关联远端 ID')
         account = self.datasets_account(task.account_id)
-        CDSProvider(account).verify_request(remote_id, task.dataset_id, task.request_payload)
+        CDSProvider(account, network=self.settings.network_proxy).verify_request(
+            remote_id, task.dataset_id, task.request_payload,
+        )
         return self.tasks.attach_remote(task_id, remote_id)
 
     def delete(self, task_id: str):
@@ -142,10 +144,13 @@ class AccountService:
         secrets: SecretStore,
         states: AccountStateRepository,
         auto_disable_threshold: int = 5,
+        *,
+        network: Callable[[], NetworkProxySettings | None] = lambda: None,
     ):
         self.secrets = secrets
         self.states = states
         self.auto_disable_threshold = auto_disable_threshold
+        self._network = network
         self._cursor = 0
         self._cursor_lock = threading.Lock()
 
@@ -216,7 +221,7 @@ class AccountService:
         account = self.secrets.get_account(account_id)
         if not account:
             raise KeyError(f"账号不存在: {account_id}")
-        return CDSProvider(account).check_connection()
+        return CDSProvider(account, network=self._network()).check_connection()
 
 
 class TemplateService:

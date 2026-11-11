@@ -7,14 +7,18 @@ imported when a completion is requested.
 
 from __future__ import annotations
 
+from contextlib import ExitStack
 import importlib.util
 import json
 import logging
+import os
 import re
+import ssl
 from typing import Any
 
 from ecmwf_downloader.application.request_compiler import validate_value
-from ecmwf_downloader.config import AppSettings, public_service_url
+from ecmwf_downloader.config import AppSettings, NetworkProxySettings, public_service_url
+from ecmwf_downloader.infrastructure.network import explicit_proxy
 from ecmwf_downloader.infrastructure.secrets import SecretStore
 
 
@@ -91,7 +95,10 @@ class AIService:
             raise RuntimeError('AI 未给出可用参数，请补充变量、时间或区域信息')
         return result
 
-    def test_connection(self, *, base_url: str, model: str, json_mode: bool, api_key: str) -> None:
+    def test_connection(
+        self, *, base_url: str, model: str, json_mode: bool, api_key: str,
+        network: NetworkProxySettings | None = None,
+    ) -> None:
         """使用表单草稿发送一个最小请求，验证后不写入设置。"""
         config = self._config()
         if not api_key:
@@ -101,17 +108,18 @@ class AIService:
         config.update(base_url=base_url, model=model, json_mode=json_mode, api_key=api_key)
         content = self._complete(
             config, [{'role': 'user', 'content': '请只返回 JSON 对象 {"ok": true}。'}],
-            token_limit=128, timeout=15,
+            token_limit=128, timeout=15, network=network,
         )
         if json_mode:
             self._json_object(content)
 
-    @staticmethod
     def _complete(
-        config: dict[str, Any], messages: list[dict[str, str]], *,
+        self, config: dict[str, Any], messages: list[dict[str, str]], *,
         token_limit: int | None = None, timeout: float | None = None,
+        network: NetworkProxySettings | None = None,
     ) -> str:
         try:
+            import httpx
             from openai import OpenAI
         except ImportError:
             raise RuntimeError("AI 功能需要安装可选依赖 openai，请运行 uv sync --extra ai") from None
@@ -131,12 +139,24 @@ class AIService:
         # SDK 的调试日志包含原始响应及异常，保留应用自己的安全错误提示。
         logging.getLogger('openai').setLevel(logging.WARNING)
         try:
-            with OpenAI(
-                api_key=str(config["api_key"]),
-                base_url=base_url,
-                timeout=timeout if timeout is not None else float(config.get("timeout", 120)),
-                max_retries=0,
-            ) as client:
+            network = network or self.settings.network_proxy
+            proxy = explicit_proxy(network, base_url)
+            with ExitStack() as stack:
+                transport = {}
+                if proxy or network.mode == 'direct':
+                    direct = network.mode == 'direct'
+                    ca_file = os.environ.get('SSL_CERT_FILE')
+                    ca_dir = os.environ.get('SSL_CERT_DIR')
+                    verify = ssl.create_default_context(cafile=ca_file, capath=ca_dir) if direct and (ca_file or ca_dir) else True
+                    transport['http_client'] = stack.enter_context(httpx.Client(
+                        proxy=proxy, trust_env=not direct, verify=verify,
+                    ))
+                client = stack.enter_context(OpenAI(
+                    api_key=str(config["api_key"]),
+                    base_url=base_url,
+                    timeout=timeout if timeout is not None else float(config.get("timeout", 120)),
+                    max_retries=0, **transport,
+                ))
                 response = client.chat.completions.create(
                     model=model,
                     messages=messages,
