@@ -39,7 +39,10 @@ export type Summary = {
   available_accounts: number
   scheduler_running: boolean
 }
+export type NetworkProxyConfig = { mode: 'direct' | 'system' | 'manual'; url: string }
 export type Settings = {
+  network_proxy: NetworkProxyConfig
+  ai_config: AIConfig
   database_path: string
   requests: { max_workers: number; max_retries: number; retry_delays: number[]; poll_interval: number }
   ai: { enabled?: boolean; model?: string }
@@ -61,6 +64,11 @@ export type Costing = {
 export type DatasetCatalogue = { items: { id: string; title: string }[]; total: number; catalogue_total: number; source: 'online' | 'cache' | 'error' | 'builtin'; stale: boolean; error: string | null; fetched_at: string | null }
 export type AIConfig = { enabled: boolean; base_url: string; model: string; json_mode: boolean; has_api_key: boolean; sdk_available: boolean; ready: boolean }
 export type AIConfigInput = Pick<AIConfig, 'enabled' | 'base_url' | 'model' | 'json_mode'> & { api_key?: string }
+export type SettingsUpdate = {
+  network_proxy?: NetworkProxyConfig
+  ai?: Partial<Omit<AIConfigInput, 'api_key'>>
+  requests?: Partial<Pick<Settings['requests'], 'poll_interval' | 'max_retries'>>
+}
 export type RequestBody = {
   dataset_id: string
   request_payload: Record<string, unknown>
@@ -106,9 +114,10 @@ export const api = {
   testAccount: (id: string) => post<{ ok: boolean; message: string }>(`/api/v1/accounts/${id}/test`),
   suggestion: (body: { field_schema: Schema & { current_selection?: Record<string, unknown> }; user_request: string }) => post<{ suggestion: Record<string, unknown> }>('/api/v1/ai/suggestions', body),
   aiConfig: () => request<AIConfig>('/api/v1/ai/config'),
-  testAIConfig: (body: AIConfigInput) => post<{ message: string }>('/api/v1/ai/test', body),
-  saveAIConfig: (body: AIConfigInput) => request<AIConfig>('/api/v1/ai/config', { method: 'PATCH', body: JSON.stringify(body) }),
+  testAIConfig: (body: AIConfigInput & { network_proxy?: NetworkProxyConfig }) => post<{ message: string }>('/api/v1/ai/test', body),
   settings: () => request<Settings>('/api/v1/settings'),
-  saveRequestSettings: (requests: Partial<Pick<Settings['requests'], 'poll_interval' | 'max_retries'>>) =>
-    request<Settings>('/api/v1/settings', { method: 'PATCH', body: JSON.stringify({ values: { requests } }) }),
+  saveSettings: (values: SettingsUpdate, ai_api_key?: string) =>
+    request<Settings>('/api/v1/settings', { method: 'PATCH', body: JSON.stringify({ values, ai_api_key }) }),
+  testNetworkProxy: (network: NetworkProxyConfig) =>
+    post<{ ok: boolean; message: string }>('/api/v1/settings/network-proxy/test', network),
 }

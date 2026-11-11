@@ -119,6 +119,31 @@ def test_cds_operations_use_new_proxy_after_save(tmp_path, monkeypatch):
         container.database.engine.dispose()
 
 
+def test_unified_settings_save_migrates_proxy_and_keeps_ai_key_private(tmp_path):
+    config = tmp_path / "config"
+    settings = AppSettings(database_path=tmp_path / "requests.db", config_dir=config)
+    container = AppContainer(settings)
+    try:
+        container.config_path.write_text("cds_proxy:\n  enabled: true\n  url: " + PROXY + "\n")
+        assert load_settings(config).network_proxy == NetworkProxySettings(mode="manual", url=PROXY)
+        with TestClient(create_app(container, with_worker=False)) as client:
+            response = client.patch("/api/v1/settings", json={
+                "values": {"network_proxy": {"mode": "manual", "url": PROXY},
+                           "requests": {"poll_interval": 11}, "ai": {"enabled": True, "model": "fixture"}},
+                "ai_api_key": "synthetic-secret",
+            })
+            assert response.status_code == 200 and "synthetic-secret" not in response.text
+            data = response.json()
+            assert data["network_proxy"] == {"mode": "manual", "url": PROXY}
+            assert data["requests"]["poll_interval"] == 11
+            assert data["ai_config"]["enabled"] and data["ai_config"]["has_api_key"]
+            assert container.secrets.ai_config()["api_key"] == "synthetic-secret"
+            saved = container.config_path.read_text()
+            assert "cds_proxy" not in saved and "synthetic-secret" not in saved
+    finally:
+        container.database.engine.dispose()
+
+
 def test_wsl_system_proxy_uses_windows_only_without_environment_proxy(monkeypatch):
     monkeypatch.setenv("WSL_DISTRO_NAME", "Fixture")
     monkeypatch.setattr(network, "getproxies", lambda: {})

@@ -23,7 +23,7 @@
 
 - CLI 直接调用应用服务；ecmwf web 通过 127.0.0.1 提供 Web、/api/v1、SSE。不引入非回环监听、多用户认证或本轮未要求的 Electron。
 - domain/schema.py、application/request_compiler.py 保存真实字段、分组、能力和指纹；Web 用 schema_revision + editor_values + request_payload 绑定预览/创建，CLI compile/schema-check 复用。字段分类完整不等于全部远端组合已验收。
-- network_proxy 为后端出站请求选择直连、系统代理或手动 HTTP(S) 代理，覆盖 CDS、NCAR 和 AI。网络测试通过 CDS 公开目录。旧 cds_proxy 配置在加载时迁移。
+- network_proxy 为后端出站请求选择直连、系统代理或手动 HTTP(S) 代理，覆盖 CDS、NCAR 和 AI。设置页统一保存，网络测试通过 CDS 公开目录。旧 cds_proxy 配置在加载时迁移。
 - 官方 CDS 目录完整分页、缓存一小时，按名称/ID 搜索，无账号可查目录；字段、约束、costing、提交需要可用账号，不静默回退为固定 ERA5 字段。
 - 默认 CDS，ecmwf-datastores-client 独立 submit/get_remote/get_results，显式 cleanup=False，不调用 retrieve/download，不读取科学数据文件体，也不自动删除已就绪远端作业。
 - 镜像为 mirror-ncar-era5、mirror-ncar-gdex-era5，分别列目录并用 HEAD 读取文件响应头、返回 HTTPS 链接；一个原文件一个任务，不裁剪或日期拆分，不需要或修改 CDS 账号统计。

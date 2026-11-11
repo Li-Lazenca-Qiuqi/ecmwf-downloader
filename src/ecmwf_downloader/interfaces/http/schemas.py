@@ -97,3 +97,4 @@ class AIConnectionTestBody(AIConfigBody):
 
 class SettingsPatch(BaseModel):
     values: dict[str, Any]
+    ai_api_key: SecretStr | None = None

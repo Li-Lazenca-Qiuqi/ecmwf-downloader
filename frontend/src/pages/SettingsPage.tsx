@@ -1,42 +1,85 @@
 import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { api } from '../lib/api'
+import { api, type AIConfigInput, type NetworkProxyConfig, type SettingsUpdate } from '../lib/api'
 import { ErrorNotice, Loading } from '../components'
 import AIServiceSettings from '../features/settings/AIServiceSettings'
+import NetworkProxySettings from '../features/settings/NetworkProxySettings'
 
 export default function SettingsPage() {
+  const query = useQuery({ queryKey: ['settings'], queryFn: api.settings })
+  return <section className="page settings-page">
+    {query.isPending && <Loading />}
+    <ErrorNotice error={query.error} />
+    {query.data && <SettingsForm current={query.data} />}
+  </section>
+}
+
+function SettingsForm({ current }: { current: Awaited<ReturnType<typeof api.settings>> }) {
   const client = useQueryClient()
-  const settings = useQuery({ queryKey: ['settings'], queryFn: api.settings })
-  const current = settings.data?.requests
+  const [proxyDraft, setProxyDraft] = useState<Partial<NetworkProxyConfig>>({})
+  const [aiDraft, setAIDraft] = useState<Partial<AIConfigInput>>({})
   const [pollDraft, setPollDraft] = useState<string>()
   const [retriesDraft, setRetriesDraft] = useState<string>()
-  const pollInterval = pollDraft ?? String(current?.poll_interval ?? '')
-  const maxRetries = retriesDraft ?? String(current?.max_retries ?? '')
-  const changes = {
-    ...(pollDraft !== undefined && Number(pollInterval) !== current?.poll_interval ? { poll_interval: Number(pollInterval) } : {}),
-    ...(retriesDraft !== undefined && Number(maxRetries) !== current?.max_retries ? { max_retries: Number(maxRetries) } : {}),
+  const proxy = { ...current.network_proxy, ...proxyDraft }
+  const network = { mode: proxy.mode, url: proxy.mode === 'manual' ? proxy.url.trim() : current.network_proxy.url }
+  const ai = { ...current.ai_config, ...aiDraft }
+  const aiKey = ai.api_key?.trim() ?? ''
+  const pollInterval = pollDraft ?? String(current.requests.poll_interval)
+  const maxRetries = retriesDraft ?? String(current.requests.max_retries)
+  const monitoring = {
+    ...(pollDraft !== undefined && Number(pollDraft) !== current.requests.poll_interval ? { poll_interval: Number(pollDraft) } : {}),
+    ...(retriesDraft !== undefined && Number(retriesDraft) !== current.requests.max_retries ? { max_retries: Number(retriesDraft) } : {}),
   }
-  const dirty = Object.keys(changes).length > 0
+  const aiChanges = {
+    ...(ai.enabled !== current.ai_config.enabled ? { enabled: ai.enabled } : {}),
+    ...(ai.base_url.trim() !== current.ai_config.base_url ? { base_url: ai.base_url.trim() } : {}),
+    ...(ai.model.trim() !== current.ai_config.model ? { model: ai.model.trim() } : {}),
+    ...(ai.json_mode !== current.ai_config.json_mode ? { json_mode: ai.json_mode } : {}),
+  }
+  const proxyChanged = network.mode !== current.network_proxy.mode || network.url !== current.network_proxy.url
+  const changes: SettingsUpdate = {
+    ...(proxyChanged ? { network_proxy: network } : {}),
+    ...(Object.keys(aiChanges).length ? { ai: aiChanges } : {}),
+    ...(Object.keys(monitoring).length ? { requests: monitoring } : {}),
+  }
+  const dirty = Object.keys(changes).length > 0 || !!aiKey
   const save = useMutation({
-    mutationFn: api.saveRequestSettings,
-    onSuccess: result => {
+    mutationFn: (values: SettingsUpdate) => api.saveSettings(values, aiKey || undefined),
+    onSuccess: (result, values) => {
       client.setQueryData(['settings'], result)
+      client.setQueryData(['ai-config'], result.ai_config)
+      setProxyDraft({})
+      setAIDraft({})
       setPollDraft(undefined)
       setRetriesDraft(undefined)
+      if (values.network_proxy) {
+        void client.invalidateQueries({ queryKey: ['datasets'] })
+        void client.invalidateQueries({ queryKey: ['request-schema'] })
+        void client.invalidateQueries({ queryKey: ['request-constraints'] })
+      }
     },
   })
 
-  return <section className="page settings-page">
-    <div className="page-heading"><div><h1>设置</h1><p>配置 AI 服务和请求监视。</p></div></div>
-    <AIServiceSettings />
-    <section className="panel settings-requests" aria-labelledby="settings-requests-title">
-      <h2 id="settings-requests-title">请求监视</h2>
-      <ErrorNotice error={settings.error || save.error} />
-      {settings.isPending ? <Loading /> : current && <form onSubmit={event => {
-        event.preventDefault()
-        if (dirty && !save.isPending) save.mutate(changes)
-      }}>
-        <fieldset className="settings-request-fields" disabled={save.isPending} onChange={() => save.reset()}>
+  return <form onSubmit={event => {
+    event.preventDefault()
+    if (dirty && !save.isPending) save.mutate(changes)
+  }} onChange={() => save.reset()}>
+    <div className="page-heading">
+      <div><h1>设置</h1><p>配置网络代理、AI 服务和请求监视。</p></div>
+      <button type="submit" className="button primary" disabled={!dirty || save.isPending}>
+        {save.isPending ? '保存中…' : '保存配置'}
+      </button>
+    </div>
+    <ErrorNotice error={save.error} />
+    {save.isSuccess && <p className="notice" role="status">配置已保存。</p>}
+    <fieldset disabled={save.isPending}>
+      <NetworkProxySettings value={proxy} testConfig={network}
+        onChange={change => { save.reset(); setProxyDraft(draft => ({ ...draft, ...change })) }} />
+      <AIServiceSettings current={current.ai_config} value={ai} network={network}
+        onChange={change => setAIDraft(draft => ({ ...draft, ...change }))} />
+      <section className="panel settings-requests" aria-labelledby="settings-requests-title">
+        <h2 id="settings-requests-title">请求监视</h2>
+        <div className="settings-request-fields">
           <div>
             <label>状态查询间隔（秒）
               <input type="number" min={1} max={3600} step="any" required value={pollInterval}
@@ -51,14 +94,8 @@ export default function SettingsPage() {
             </label>
             <p className="helper" id="max-retries-help">新请求查询失败后最多重试的次数。设为 0 时不自动重试。</p>
           </div>
-        </fieldset>
-        <div className="settings-request-actions">
-          <button type="submit" className="button primary" disabled={save.isPending || !dirty}>
-            {save.isPending ? '保存中…' : '保存监视设置'}
-          </button>
-          {save.isSuccess && <span className="helper" role="status">监视设置已保存。</span>}
         </div>
-      </form>}
-    </section>
-  </section>
+      </section>
+    </fieldset>
+  </form>
 }

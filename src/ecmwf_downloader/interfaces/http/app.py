@@ -310,12 +310,13 @@ def create_app(container: Optional[AppContainer] = None, *, with_worker: bool = 
     @app.get("/api/v1/settings")
     def get_settings():
         settings = app_container.settings.model_dump(mode="json")
-        return {**settings, "ai": public_ai_settings(settings["ai"])}
+        return {**settings, "ai": public_ai_settings(settings["ai"]), "ai_config": app_container.ai.configuration()}
 
     @app.patch("/api/v1/settings")
     def patch_settings(body: SettingsPatch):
-        settings = app_container.update_settings(body.values).model_dump(mode="json")
-        return {**settings, "ai": public_ai_settings(settings["ai"])}
+        key = body.ai_api_key.get_secret_value().strip() if body.ai_api_key else ''
+        app_container.update_settings(body.values, ai_key=key)
+        return get_settings()
 
     @app.post("/api/v1/settings/network-proxy/test")
     def test_network_proxy(body: NetworkProxySettings):

@@ -90,6 +90,8 @@ class AppContainer:
                     runtime[section] = {**runtime[section], **section_values}
                 validate_app_config(data)
                 updated = validate_app_config(runtime)
+                if values.get('ai', {}).get('enabled') and not (ai_key or self.secrets.ai_config().get('api_key')):
+                    raise SettingsError('启用 AI 前请填写 API Key。')
                 atomic_write_yaml(path, data)
                 if ai_key:
                     try:

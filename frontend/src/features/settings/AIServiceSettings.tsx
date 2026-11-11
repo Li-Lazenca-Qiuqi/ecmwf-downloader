@@ -1,45 +1,32 @@
-import { useState } from 'react'
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useMutation } from '@tanstack/react-query'
 import { Loader2, Radio, Sparkles } from 'lucide-react'
-import { api, type AIConfigInput } from '../../lib/api'
-import { ErrorNotice, Loading } from '../../components'
+import { api, type AIConfig, type AIConfigInput, type NetworkProxyConfig } from '../../lib/api'
+import { ErrorNotice } from '../../components'
 
-export default function AIServiceSettings() {
-  const client = useQueryClient()
-  const configQuery = useQuery({ queryKey: ['ai-config'], queryFn: api.aiConfig, staleTime: 30000, retry: false })
-  const config = configQuery.data
-  const [urlDraft, setUrlDraft] = useState<string>()
-  const [modelDraft, setModelDraft] = useState<string>()
-  const [key, setKey] = useState('')
-  const url = urlDraft ?? (config?.base_url || 'https://api.openai.com/v1')
-  const model = modelDraft ?? config?.model ?? ''
+type Props = {
+  current: AIConfig
+  value: AIConfigInput
+  network: NetworkProxyConfig
+  onChange: (change: Partial<AIConfigInput>) => void
+}
 
-  const save = useMutation({
-    mutationFn: ({ body }: { body: AIConfigInput; source: 'form' | 'switch' }) => api.saveAIConfig(body),
-    onSuccess: (result, { source }) => {
-      client.setQueryData(['ai-config'], result)
-      void client.invalidateQueries({ queryKey: ['settings'] })
-      if (source === 'form') {
-        setUrlDraft(undefined)
-        setModelDraft(undefined)
-        setKey('')
-      }
-    },
-  })
-  const test = useMutation({ mutationFn: api.testAIConfig })
-  const body: AIConfigInput = {
-    enabled: config?.enabled ?? false, base_url: url.trim(), model: model.trim(), json_mode: config?.json_mode ?? true,
-    ...(key.trim() ? { api_key: key.trim() } : {}),
+export default function AIServiceSettings({ current, value, network, onChange }: Props) {
+  const body = {
+    enabled: value.enabled,
+    base_url: value.base_url.trim(),
+    model: value.model.trim(),
+    api_key: value.api_key?.trim(),
+    json_mode: value.json_mode,
+    network_proxy: network,
   }
-  const working = save.isPending || test.isPending
-  const savedKeyMatches = config?.has_api_key && body.base_url.replace(/\/+$/, '') === config.base_url
+  const test = useMutation({ mutationFn: () => api.testAIConfig(body), gcTime: 0 })
+  const savedKeyMatches = current.has_api_key && body.base_url.replace(/\/+$/, '') === current.base_url
   const canTest = body.base_url && body.model && (body.api_key || savedKeyMatches)
+    && (network.mode !== 'manual' || !!network.url)
 
-  const saveSwitch = (change: Partial<Pick<AIConfigInput, 'enabled' | 'json_mode'>>) => {
-    if (!config) return
-    const { enabled, json_mode, base_url, model } = config
+  const edit = (change: Partial<AIConfigInput>) => {
     test.reset()
-    save.mutate({ body: { enabled, json_mode, base_url, model, ...change }, source: 'switch' })
+    onChange(change)
   }
 
   return <section className="panel settings-ai" id="ai" aria-labelledby="settings-ai-title">
@@ -48,44 +35,36 @@ export default function AIServiceSettings() {
         <span className="ai-service-icon"><Sparkles size={18} aria-hidden="true" /></span>
         <div><h2 id="settings-ai-title">AI 服务</h2><p id="ai-enabled-help" className="helper">为提交请求页提供参数补全。</p></div>
       </div>
-      {config && <label className="ai-enable-control">
+      <label className="ai-enable-control">
         启用
-        <input className="ai-config-switch" type="checkbox" role="switch" aria-label="启用 AI 参数补全"
-          aria-describedby="ai-enabled-help" checked={config.enabled} disabled={working}
-          onChange={event => saveSwitch({ enabled: event.target.checked })} />
-      </label>}
+        <input className="settings-switch" type="checkbox" role="switch" aria-label="启用 AI 参数补全"
+          aria-describedby="ai-enabled-help" checked={value.enabled} disabled={test.isPending}
+          onChange={event => edit({ enabled: event.target.checked })} />
+      </label>
     </div>
-    <ErrorNotice error={configQuery.error} />
-    {configQuery.isPending ? <Loading /> : <form onSubmit={event => {
-      event.preventDefault()
-      if (!working) {
-        test.reset()
-        save.mutate({ body, source: 'form' })
-      }
-    }}>
-      <fieldset className="ai-config-fields" disabled={working} onChange={() => { test.reset(); save.reset() }}>
-        <label>服务地址<input aria-label="AI 服务地址" type="url" value={url} onChange={event => setUrlDraft(event.target.value)} placeholder="https://api.openai.com/v1" required /></label>
-        <label>模型名称<input aria-label="AI 模型名称" value={model} onChange={event => setModelDraft(event.target.value)} placeholder="填写服务支持的模型 ID" required /></label>
-        <label className="ai-config-key">API Key<input aria-label="AI API Key" type="text" autoComplete="off" spellCheck={false} autoCapitalize="off"
-          value={key} onChange={event => setKey(event.target.value)}
-          placeholder={savedKeyMatches ? '已保存，留空复用' : '输入 API Key'} required={config?.enabled && !config.has_api_key} /></label>
-      </fieldset>
-      {config && <label className="ai-json-control">
-        <span>使用 JSON 模式<small id="ai-json-help">默认开启，要求服务返回 JSON 对象。</small></span>
-        <input className="ai-config-switch" type="checkbox" role="switch" aria-describedby="ai-json-help"
-          checked={config.json_mode} disabled={working} onChange={event => saveSwitch({ json_mode: event.target.checked })} />
-      </label>}
-      <ErrorNotice error={save.error || test.error} />
-      {test.data && <p className="notice" role="status">{test.data.message}</p>}
-      {save.isSuccess && save.variables.source === 'form' && <p className="notice" role="status">AI 服务配置已保存。</p>}
-      <div className="ai-config-actions">
-        <button type="button" className="button" disabled={working || !canTest} onClick={() => { save.reset(); test.mutate(body) }}>
-          {test.isPending ? <Loader2 size={15} className="spin" /> : <Radio size={15} />}测试连接
-        </button>
-        <button type="submit" className="button primary" disabled={working}>
-          {save.isPending && save.variables.source === 'form' && <Loader2 size={15} className="spin" />}保存配置
-        </button>
+    <fieldset className="ai-config-fields" disabled={test.isPending}>
+      <label>服务地址<input aria-label="AI 服务地址" type="url" value={value.base_url}
+        onChange={event => edit({ base_url: event.target.value })} placeholder="https://api.openai.com/v1" required /></label>
+      <label>模型名称<input aria-label="AI 模型名称" value={value.model}
+        onChange={event => edit({ model: event.target.value })} placeholder="填写服务支持的模型 ID" required /></label>
+      <div className="ai-config-key">
+        <label htmlFor="settings-ai-key">API Key</label>
+        <div className="ai-key-controls">
+          <input id="settings-ai-key" aria-label="AI API Key" type="text" autoComplete="off" spellCheck={false} autoCapitalize="off"
+            value={value.api_key ?? ''} onChange={event => edit({ api_key: event.target.value })}
+            placeholder="输入 API Key" required={value.enabled && !current.has_api_key} />
+          <button type="button" className="button" disabled={test.isPending || !canTest} onClick={() => test.mutate()}>
+            {test.isPending ? <Loader2 size={15} className="spin" /> : <Radio size={15} />}测试连接
+          </button>
+        </div>
       </div>
-    </form>}
+    </fieldset>
+    <label className="ai-json-control">
+      <span>使用 JSON 模式<small id="ai-json-help">默认开启，要求服务返回 JSON 对象。</small></span>
+      <input className="settings-switch" type="checkbox" role="switch" aria-describedby="ai-json-help"
+        checked={value.json_mode} disabled={test.isPending} onChange={event => edit({ json_mode: event.target.checked })} />
+    </label>
+    <ErrorNotice error={test.error} />
+    {test.data && <p className="notice" role="status">{test.data.message}</p>}
   </section>
 }
