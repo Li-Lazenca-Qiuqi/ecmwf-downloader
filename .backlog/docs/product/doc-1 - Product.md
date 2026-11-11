@@ -23,6 +23,8 @@ updated_date: '2026-11-09T15:51:00Z'
 - NCAR 一个原文件对应一个链接任务，不提供区域裁剪、格式转换或年月日拆分。
 - Google ARCO 本地读取 Zarr 并导出 NetCDF 的能力已移除，可提交来源不再包含 ARCO。raw 云文件或远端子集服务如需接入，须单独明确真实接口，不能用 Zarr 根地址冒充所选子集文件。
 
+管理台四个页面与顶部导航的内容区域共用同一居中宽度。按可用视口宽度的 94% 伸缩，上限为 1360px。保留稳定的滚动条空间，避免切换页面时内容宽度跳动。
+
 ## 请求编辑
 
 通用字段模型保留真实分组、互斥分支、原始选项类型、默认值、坐标范围与编码，不用有限 ERA5 字段替代在线定义。request_compiler 同时服务 Web 预览/创建与 CLI 的 compile、schema-check；schema_revision、editor_values 和 request_payload 必须一致。
