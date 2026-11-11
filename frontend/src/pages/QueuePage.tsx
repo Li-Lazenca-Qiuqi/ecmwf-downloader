@@ -19,7 +19,15 @@ function requestTitle(task: Task) {
   if (!batch) return task.title
   return batch.total > 1 ? `${batch.name} · ${batch.position}/${batch.total}` : batch.name
 }
-function waitingReason(task: Task, summary?: Summary) {
+function statusDetail(task: Task, summary?: Summary) {
+  if (task.status === 'completed' && task.results.length) {
+    let totalBytes = 0
+    for (const asset of task.results) {
+      if (asset.size === null) return null
+      totalBytes += asset.size
+    }
+    return formatBytes(totalBytes)
+  }
   if (task.status === 'submission_unknown') return '需到官方请求页核实并关联远端 ID'
   if (task.error_message && task.next_retry_at) return '查询将重试：' + formatDate(task.next_retry_at)
   if (task.status === 'queued' && summary && !directSources.has(task.dataset_id) && !summary.available_accounts) return '等待可用 CDS 账号'
@@ -139,9 +147,7 @@ export default function QueuePage() {
       <span>本地排队 <strong>{counts ? counts.queued ?? 0 : '—'}</strong></span>
       <span>远端排队 <strong>{counts ? counts.accepted ?? 0 : '—'}</strong></span>
       <span>处理中 <strong>{counts ? (counts.running ?? 0) + (counts.submitting ?? 0) + (counts.refreshing ?? 0) : '—'}</strong></span>
-      <span>链接就绪 <strong>{counts ? counts.completed ?? 0 : '—'}</strong></span>
-      <span>需处理 <strong>{counts ? (counts.failed ?? 0) + (counts.expired ?? 0) + (counts.submission_unknown ?? 0) : '—'}</strong></span>
-      {summary.data?.max_workers != null && <span>后台 API 操作 <strong>{summary.data.active_workers} / {summary.data.max_workers}</strong></span>}
+      <span title="可参与调度的 CDS 账号">可用账号 <strong>{summary.data?.available_accounts ?? '—'}</strong></span>
     </div>
     <ErrorNotice error={summary.error} />
     {summary.data && !summary.data.scheduler_running && <p className="notice">本服务未持有调度租约，请保持独立的 <code>ecmwf worker</code> 或另一个服务实例在后台监视。</p>}
@@ -178,7 +184,7 @@ export default function QueuePage() {
               <button type="button" className="text-button filename" onClick={() => setParams({ selected: task.id })}>{requestTitle(task)}</button>
               <small>{directSources.get(task.dataset_id) ?? 'CDS'} · {task.dataset_id}</small>
             </td>
-            <td><StatusBadge status={task.status} /><small>{waitingReason(task, summary.data)}</small></td>
+            <td><StatusBadge status={task.status} /><small>{statusDetail(task, summary.data)}</small></td>
             <td className="remote-cell"><code>{task.remote_request_id || (directSources.has(task.dataset_id) ? '文件直链' : '—')}</code></td><td className="date-cell">{formatDate(task.created_at)}</td><td>{actions(task)}</td>
           </tr>)}</tbody></table></div>
         {!total && !tasks.isError && <p className="empty-state">{search || status ? '没有符合条件的请求。' : '暂无请求，提交后会自动监视并获取链接。'}</p>}
