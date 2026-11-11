@@ -96,6 +96,10 @@ progress { width: 70px; height: 6px; accent-color: var(--blue); }
 .queue-page .task-table th { height: var(--queue-control-height); padding-block: 0; line-height: 16px; }
 .queue-page .task-table td { padding-block: 8px; line-height: 20px; overflow-wrap: anywhere; }
 .queue-page .task-table .filename { display: block; }
+.queue-page .task-table .status-badge { max-width: 100%; overflow: hidden; text-overflow: ellipsis; vertical-align: top; }
+.queue-page .task-table .task-status-detail { display: block; height: 16px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.task-row-actions { gap: 4px; flex-wrap: nowrap; }
+.task-row-actions .task-icon-button { flex: none; }
 .queue-page .task-table .date-cell { white-space: normal; }
 .queue-page .task-table .selection-cell { padding-inline: 0; text-align: center; }
 .request-checkbox { width: 16px; height: 16px; padding: 0; margin: 0; vertical-align: middle; cursor: pointer; accent-color: var(--blue); }
@@ -119,7 +123,6 @@ progress { width: 70px; height: 6px; accent-color: var(--blue); }
   .queue-page .status-column { width: 25%; }
   .queue-page .actions-column { width: 128px; }
   .queue-page .task-table td, .queue-page .task-table th { padding-inline: 8px; }
-  .queue-page .task-table .status-badge { white-space: normal; }
   .queue-page .task-table .button { padding: 6px; white-space: normal; }
 }
 @media (hover: none) { :is(.task-table, .account-table) .request-checkbox { opacity: 1; } }

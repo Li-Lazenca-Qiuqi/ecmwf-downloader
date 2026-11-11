@@ -321,10 +321,11 @@ class TaskRepository:
     def request_refresh(self, task_id):
         with self.database.session(immediate=True) as session:
             row = self._row(session, task_id)
-            if row.status != 'completed':
-                raise ValueError('仅就绪结果可刷新链接')
+            if row.status == 'completed':
+                self._change(session, row, TaskStatus.REFRESHING)
+            elif not (row.status in {'accepted', 'running'} and row.remote_request_id and not row.cancel_requested):
+                raise ValueError('仅远端排队、处理中的请求或就绪结果可刷新状态')
             row.next_retry_at = None
-            self._change(session, row, TaskStatus.REFRESHING)
             return self._to_data(row)
 
     def attach_remote(self, task_id, remote_id):

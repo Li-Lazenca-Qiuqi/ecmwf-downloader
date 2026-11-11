@@ -142,6 +142,30 @@ def test_refresh_expiry_and_explicit_resubmission(container, monkeypatch):
     again = container.tasks.retry(task.id)
     assert again.status == TaskStatus.QUEUED and again.remote_request_id is None
 
+@pytest.mark.parametrize('state', ['accepted', 'running'])
+def test_manual_refresh_schedules_poll_for_active_remote_request(container, monkeypatch, state):
+    task = submitted(container, monkeypatch)
+    assert claim(container).id == task.id
+    waiting = container.tasks_repository.apply_remote(task.id, state, [], 900, remote_id='remote-1')
+    assert waiting.next_retry_at is not None
+    assert claim(container) is None
+
+    with TestClient(create_app(container, with_worker=False)) as client:
+        response = client.post(f'/api/v1/tasks/{task.id}/refresh')
+        assert response.status_code == 200
+        current = response.json()
+        assert current['status'] == state and current['next_retry_at'] is None
+        assert current['remote_request_id'] == 'remote-1'
+        assert current['account_id'] == waiting.account_id
+
+        claimed = claim(container)
+        assert claimed.id == task.id and claimed.status.value == state
+        queued = container.tasks.create(dataset_id='test', request_payload={})[0]
+        assert client.post(f'/api/v1/tasks/{queued.id}/refresh').status_code == 422
+        assert client.post(f'/api/v1/tasks/{task.id}/refresh').status_code == 200
+        assert claim(container).id == queued.id
+
+
 def test_multiple_results_refresh_does_not_double_count_account(container, monkeypatch):
     task = submitted(container, monkeypatch)
     assets = [*ASSETS, {'url':'https://files.example.test/second.nc', 'size':42}]

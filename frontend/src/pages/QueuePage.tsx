@@ -11,6 +11,16 @@ import RequestParameterViews from '../features/request/RequestParameterViews'
 const pageSize = 10
 const statusOptions = [{ value: '', label: '全部状态' }, ...Object.entries(statusLabels).map(([value, label]) => ({ value, label }))]
 const activeStates = ['queued', 'submitting', 'accepted', 'running', 'refreshing']
+const queueActions = {
+  refresh: { label: '刷新状态', icon: RefreshCw },
+  copy: { label: '复制链接', icon: Copy },
+  retry: { label: '重试', icon: RotateCw },
+  cancel: { label: '取消', icon: X },
+  delete: { label: '删除', icon: Trash2 },
+}
+type QueueAction = keyof typeof queueActions
+type RequestAction = Exclude<QueueAction, 'copy'>
+const operationOrder = Object.keys(queueActions) as QueueAction[]
 const directSources = new Map([
   ['mirror-ncar-era5', 'NCAR AWS'],
   ['mirror-ncar-gdex-era5', 'NCAR GDEX'],
@@ -52,11 +62,17 @@ function retryLabel(task: Task) {
     return task.cancel_requested ? '重试取消' : '继续监视'
   return '重新提交'
 }
-function canDelete(task: Task) {
-  if (task.status === 'failed') {
-    return !task.remote_request_id || ['failed', 'rejected', 'dismissed', 'expired'].includes(task.remote_status || '')
+function availableActions(task: Task): Record<QueueAction, boolean> {
+  const finishedRemotely = ['failed', 'rejected', 'dismissed', 'expired'].includes(task.remote_status || '')
+  const mayStillRun = !!task.remote_request_id && !finishedRemotely
+  const completed = task.status === 'completed'
+  return {
+    refresh: completed || (['accepted', 'running'].includes(task.status) && !!task.remote_request_id && !task.cancel_requested),
+    copy: completed && task.results.length > 0,
+    retry: ['failed', 'expired', 'cancelled'].includes(task.status),
+    cancel: activeStates.includes(task.status) || (task.status === 'failed' && mayStillRun),
+    delete: completed || ['cancelled', 'expired'].includes(task.status) || (task.status === 'failed' && !mayStillRun),
   }
-  return ['completed', 'cancelled', 'expired'].includes(task.status)
 }
 
 export default function QueuePage() {
@@ -74,30 +90,29 @@ export default function QueuePage() {
   if (status) query.set('status', status)
   const tasks = useQuery({ queryKey: ['tasks', query.toString()], queryFn: () => api.tasks('?' + query), refetchInterval: 5000 })
   const action = useMutation({
-    mutationFn: ({ id, operation }: { id: string; operation: 'cancel' | 'retry' | 'delete' }) =>
-      operation === 'delete' ? api.deleteTask(id) : api.action(id, operation),
-    onSuccess: (_result, { id, operation }) => {
+    mutationFn: async ({ ids, operation }: { ids: string[]; operation: RequestAction }) => {
+      const results = await Promise.allSettled(ids.map(id =>
+        operation === 'delete' ? api.deleteTask(id) : api.action(id, operation),
+      ))
+      const succeeded = ids.filter((_, index) => results[index].status === 'fulfilled')
+      const failures = results.filter(result => result.status === 'rejected')
+      const error = failures.length === 0 ? null : ids.length === 1 ? failures[0].reason :
+        new Error(`${queueActions[operation].label}请求成功 ${succeeded.length} 条，失败 ${failures.length} 条。`)
+      return { succeeded, error }
+    },
+    onSuccess: ({ succeeded }, { operation }) => {
       if (operation === 'delete') {
         setSelectedIds(current => {
           const next = new Set(current)
-          next.delete(id)
+          for (const id of succeeded) next.delete(id)
           return next
         })
-        if (selectedId === id) setParams({})
+        if (selectedId && succeeded.includes(selectedId)) setParams({})
       }
-      void queryClient.invalidateQueries({ queryKey: ['tasks'] })
-      void queryClient.invalidateQueries({ queryKey: ['summary'] })
-    },
-  })
-  const refreshLinks = useMutation({
-    mutationFn: async (ids: string[]) => {
-      const results = await Promise.allSettled(ids.map(id => api.action(id, 'refresh')))
-      const failures = results.filter(result => result.status === 'rejected').length
-      if (failures) throw new Error(`${ids.length - failures} 个请求已开始更新，${failures} 个更新失败，请重试。`)
-    },
-    onSettled: () => {
-      void queryClient.invalidateQueries({ queryKey: ['tasks'] })
-      void queryClient.invalidateQueries({ queryKey: ['summary'] })
+      return Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['tasks'] }),
+        queryClient.invalidateQueries({ queryKey: ['summary'] }),
+      ])
     },
   })
   const lastOffset = tasks.data ? Math.max(0, Math.floor((tasks.data.total - 1) / pageSize) * pageSize) : offset
@@ -112,8 +127,13 @@ export default function QueuePage() {
   const items = tasks.data?.items ?? []
   const selectedItems = items.filter(task => selectedIds.has(task.id))
   const allSelected = items.length > 0 && selectedItems.length === items.length
-  const readyItems = (selectedItems.length ? selectedItems : items).filter(task => task.status === 'completed')
-  const readyUrls = readyItems.flatMap(task => task.results.map(asset => asset.url))
+  const batchTargets = (operation: QueueAction) => {
+    const usesCurrentPage = operation === 'refresh' || operation === 'copy'
+    const candidates = usesCurrentPage && !selectedItems.length ? items : selectedItems
+    return candidates.filter(task => availableActions(task)[operation])
+  }
+  const verification = selectedItems.length === 1 && selectedItems[0].status === 'submission_unknown'
+    ? selectedItems[0] : null
   const changePage = (nextOffset: number) => { setOffset(nextOffset); setSelectedIds(new Set()) }
   const toggleSelection = (id: string) => setSelectedIds(current => {
     const next = new Set(current)
@@ -121,27 +141,31 @@ export default function QueuePage() {
     else next.add(id)
     return next
   })
+  const runAction = (operation: QueueAction, targets: Task[]) => {
+    if (operation === 'copy') {
+      void links.copy(targets.flatMap(task => task.results.map(asset => asset.url)))
+      return
+    }
+    if (operation === 'delete' && !window.confirm(`删除 ${targets.length} 条本地请求记录？删除后将无法在队列中查看这些记录和结果链接。`)) return
+    action.mutate({ ids: targets.map(task => task.id), operation })
+  }
   const actions = (task: Task) => {
-    const retry = retryLabel(task)
-    const resubmit = retry === '重新提交'
-    return <div className="row-actions">
-      {(activeStates.includes(task.status) || (task.status === 'failed' && !!task.remote_request_id && !['failed','rejected','dismissed','expired'].includes(task.remote_status || ''))) && <button type="button" className="button danger" disabled={action.isPending} onClick={() => action.mutate({ id: task.id, operation: 'cancel' })}>取消</button>}
-      {['failed', 'expired', 'cancelled'].includes(task.status) && <button type="button"
-        className={resubmit ? 'task-icon-button' : 'button'} title={resubmit ? retry : undefined}
-        aria-label={resubmit ? retry : undefined} disabled={action.isPending}
-        onClick={() => action.mutate({ id: task.id, operation: 'retry' })}>
-        {resubmit ? <RotateCw size={17} aria-hidden="true" /> : retry}
-      </button>}
-      {task.status === 'completed' && <button type="button" className="task-icon-button" title="复制链接" aria-label="复制链接"
-        disabled={!task.results.length} onClick={() => void links.copy(task.results.map(asset => asset.url))}>
-        <Copy size={17} aria-hidden="true" />
-      </button>}
-      {canDelete(task) && <button type="button" className="task-icon-button danger" title="删除请求记录"
-        aria-label="删除请求记录" disabled={action.isPending} onClick={() => {
-          if (window.confirm('删除这条本地请求记录？删除后将无法在队列中查看它的详情和结果链接。')) {
-            action.mutate({ id: task.id, operation: 'delete' })
-          }
-        }}><Trash2 size={16} aria-hidden="true" /></button>}
+    const available = availableActions(task)
+    return <div className="row-actions task-row-actions">
+      {operationOrder.map(operation => {
+        if (operation !== 'refresh' && !available[operation]) return null
+        const { icon: Icon } = queueActions[operation]
+        const label = operation === 'retry' ? retryLabel(task)
+          : operation === 'delete' ? '删除请求记录' : queueActions[operation].label
+        const refreshing = operation === 'refresh' && action.isPending
+          && action.variables.operation === 'refresh' && action.variables.ids.includes(task.id)
+        return <button key={operation} type="button"
+          className={operation === 'delete' || operation === 'cancel' ? 'task-icon-button danger' : 'task-icon-button'}
+          title={label} aria-label={label} disabled={!available[operation] || action.isPending}
+          onClick={() => runAction(operation, [task])}>
+          <Icon size={17} className={refreshing ? 'spin' : undefined} aria-hidden="true" />
+        </button>
+      })}
       {task.status === 'submission_unknown' && <button type="button" className="button" onClick={() => setParams({ selected: task.id })}>核实提交</button>}
     </div>
   }
@@ -162,14 +186,21 @@ export default function QueuePage() {
         <CardSelect label="请求状态" value={status} options={statusOptions}
           onChange={value => { setStatus(value); changePage(0) }} />
         {selectedItems.length > 0 && <span className="selection-count">已选 {selectedItems.length} 项</span>}
-        <button type="button" className="button" disabled={!readyItems.length || refreshLinks.isPending}
-          title={selectedItems.length ? '重新查询已选就绪请求的状态与结果链接' : '重新查询本页就绪请求的状态与结果链接'}
-          onClick={() => refreshLinks.mutate(readyItems.map(task => task.id))}>
-          <RefreshCw size={15} className={refreshLinks.isPending ? 'spin' : undefined} />刷新状态
-        </button>
-        <button type="button" className="button" disabled={!readyUrls.length} title={selectedItems.length ? '将已选请求的就绪链接复制到剪贴板' : '将本页就绪请求的链接复制到剪贴板'} onClick={() => void links.copy(readyUrls)}><Copy size={15} />复制链接</button>
+        {operationOrder.map(operation => {
+          const targets = batchTargets(operation)
+          const { label, icon: Icon } = queueActions[operation]
+          const refreshing = operation === 'refresh' && action.isPending && action.variables.operation === 'refresh'
+          return <button key={operation} type="button"
+            className={operation === 'delete' || operation === 'cancel' ? 'button danger' : 'button'}
+            title={targets.length ? `${label} ${targets.length} 条可操作请求` : label}
+            disabled={!targets.length || action.isPending} onClick={() => runAction(operation, targets)}>
+            <Icon size={15} className={refreshing ? 'spin' : undefined} aria-hidden="true" />{label}
+          </button>
+        })}
+        {verification && <button type="button" className="button"
+          onClick={() => setParams({ selected: verification.id })}>核实提交</button>}
       </div>
-      <ErrorNotice error={tasks.error || action.error || refreshLinks.error} />
+      <ErrorNotice error={tasks.error || action.error || action.data?.error} />
       {tasks.isPending ? <Loading /> : <>
         <div className="table-scroll"><table className="task-table">
           <colgroup><col className="selection-column" /><col /><col className="status-column" /><col className="remote-column" /><col className="date-column" /><col className="actions-column" /></colgroup>
@@ -188,7 +219,7 @@ export default function QueuePage() {
               <button type="button" className="text-button filename" aria-haspopup="dialog" onClick={() => setParams({ selected: task.id })}>{requestTitle(task)}</button>
               <small>{directSources.get(task.dataset_id) ?? 'CDS'} · {task.dataset_id}</small>
             </td>
-            <td><StatusBadge status={task.status} /><small>{statusDetail(task, summary.data)}</small></td>
+            <td><QueueStatus task={task} summary={summary.data} /></td>
             <td className="remote-cell"><code>{task.remote_request_id || (directSources.has(task.dataset_id) ? '文件直链' : '—')}</code></td><td className="date-cell">{formatDate(task.created_at)}</td><td>{actions(task)}</td>
           </tr>)}</tbody></table></div>
         {!total && !tasks.isError && <p className="empty-state">{search || status ? '没有符合条件的请求。' : '暂无请求，提交后会自动监视并获取链接。'}</p>}
@@ -198,6 +229,14 @@ export default function QueuePage() {
     {selectedId && <TaskDetails key={selectedId} id={selectedId} onClose={() => setParams({})} />}
   </section>
 }
+function QueueStatus({ task, summary }: { task: Task; summary?: Summary }) {
+  const detail = statusDetail(task, summary)
+  return <>
+    <StatusBadge status={task.status} />
+    <small className="task-status-detail" title={detail ?? undefined}>{detail}</small>
+  </>
+}
+
 function TaskDetails({ id, onClose }: { id: string; onClose: () => void }) {
   const dialog = useRef<HTMLDialogElement>(null)
   const task = useQuery({ queryKey: ['tasks', 'detail', id], queryFn: () => api.task(id), refetchInterval: 5000 })
