@@ -10,12 +10,13 @@ from uuid import uuid4
 
 from sqlalchemy import case, func, or_, select
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import aliased
+from sqlalchemy.orm import aliased, contains_eager
 
 from ecmwf_downloader.domain.models import (
     ACTIVE_STATUSES,
     ResultAsset,
     SplitStrategy,
+    TaskBatch,
     TaskData,
     TaskStatus,
     can_transition,
@@ -23,6 +24,7 @@ from ecmwf_downloader.domain.models import (
 from ecmwf_downloader.infrastructure.db import (
     AccountStateRow,
     Database,
+    RequestBatchItemRow,
     RequestTemplateRow,
     SchedulerLeaseRow,
     TaskEventRow,
@@ -46,11 +48,12 @@ class TaskRepository:
     def _to_data(row):
         data = {name: (json_loads(row.request_payload) if name == 'request_payload'
                        else json.loads(row.results) if name == 'results'
-                       else getattr(row, name)) for name in TaskData.model_fields}
+                       else getattr(row, name)) for name in TaskData.model_fields if name != 'batch'}
         for name, value in data.items():
             if isinstance(value, datetime) and value.tzinfo is None:
                 data[name] = value.replace(tzinfo=timezone.utc)
-        return TaskData(**data)
+        batch = TaskBatch.model_validate(row.batch, from_attributes=True) if row.batch else None
+        return TaskData(**data, batch=batch)
 
     @staticmethod
     def _event(session, *, event_type, task_id, payload, now):
@@ -82,19 +85,24 @@ class TaskRepository:
                 payload["used_account_id"] = used_account_id
             self._event(session, event_type="task.status_changed", task_id=row.id, payload=payload, now=row.updated_at)
 
-    def create(self, *, dataset_id, request_payload, title, split_strategy=SplitStrategy.NONE,
-               max_retries=3, task_id=None):
-        now = _utc_now()
+    def create_batch(self, *, dataset_id, items, name, split_strategy, max_retries):
+        batch_id = str(uuid4())
         with self.database.session(immediate=True) as session:
-            row = TaskRow(id=task_id or str(uuid4()), dataset_id=dataset_id,
-                          request_payload=json_dumps(request_payload), title=title,
-                          status=TaskStatus.QUEUED.value, split_strategy=split_strategy.value,
-                          max_retries=max_retries, created_at=now, updated_at=now)
-            session.add(row)
+            now = _utc_now()
+            rows = []
+            for position, (request_payload, title) in enumerate(items, start=1):
+                row = TaskRow(id=str(uuid4()), dataset_id=dataset_id,
+                              request_payload=json_dumps(request_payload), title=title,
+                              status=TaskStatus.QUEUED.value, split_strategy=split_strategy.value,
+                              max_retries=max_retries, created_at=now, updated_at=now,
+                              batch=RequestBatchItemRow(batch_id=batch_id, name=name,
+                                                        position=position, total=len(items)))
+                rows.append(row)
+                session.add(row)
+                self._event(session, event_type="task.created", task_id=row.id,
+                            payload={"status": row.status}, now=now)
             session.flush()
-            self._event(session, event_type="task.created", task_id=row.id,
-                        payload={"status": row.status}, now=now)
-            return self._to_data(row)
+            return [self._to_data(row) for row in rows]
 
     def get(self, task_id):
         with self.database.session() as session:
@@ -109,10 +117,14 @@ class TaskRepository:
             if search:
                 needle = '%' + search + '%'
                 predicates.append(or_(TaskRow.id.like(needle), TaskRow.title.like(needle),
-                                      TaskRow.dataset_id.like(needle), TaskRow.remote_request_id.like(needle)))
-            query = select(TaskRow).where(*predicates)
+                                      TaskRow.dataset_id.like(needle), TaskRow.remote_request_id.like(needle),
+                                      TaskRow.batch.has(RequestBatchItemRow.name.like(needle))))
+            query = select(TaskRow).outerjoin(TaskRow.batch).options(contains_eager(TaskRow.batch)).where(*predicates)
             total = session.scalar(select(func.count()).select_from(TaskRow).where(*predicates))
-            rows = session.scalars(query.order_by(TaskRow.created_at.desc()).limit(limit).offset(offset))
+            rows = session.scalars(query.order_by(
+                TaskRow.created_at.desc(), RequestBatchItemRow.batch_id,
+                RequestBatchItemRow.position, TaskRow.id,
+            ).limit(limit).offset(offset))
             return [self._to_data(row) for row in rows], int(total or 0)
 
     def summary(self):
@@ -132,7 +144,7 @@ class TaskRepository:
                 if expires <= now:
                     return None
             active = [status.value for status in ACTIVE_STATUSES if status != TaskStatus.SUBMITTING]
-            due = select(TaskRow).where(
+            due = select(TaskRow).outerjoin(TaskRow.batch).options(contains_eager(TaskRow.batch)).where(
                 TaskRow.worker_id.is_(None), TaskRow.id.not_in(exclude_ids),
                 or_(TaskRow.next_retry_at.is_(None), TaskRow.next_retry_at <= now),
                 or_(TaskRow.status.in_(active),
@@ -140,7 +152,9 @@ class TaskRepository:
                         True if account_id else TaskRow.dataset_id.in_(mirror_ids))))
             row = session.scalar(due.order_by(
                 case((TaskRow.status == 'cancelling', 0), (TaskRow.status == 'queued', 2), else_=1),
-                TaskRow.next_retry_at.asc(), TaskRow.created_at.asc()).limit(1))
+                TaskRow.next_retry_at.asc(), TaskRow.created_at.asc(), RequestBatchItemRow.batch_id,
+                RequestBatchItemRow.position, TaskRow.id,
+            ).limit(1))
             if row is None:
                 return None
             if row.status == 'queued':

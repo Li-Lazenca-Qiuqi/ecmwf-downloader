@@ -14,6 +14,11 @@ const directSources = new Map([
   ['mirror-ncar-era5', 'NCAR AWS'],
   ['mirror-ncar-gdex-era5', 'NCAR GDEX'],
 ])
+function requestTitle(task: Task) {
+  const batch = task.batch
+  if (!batch) return task.title
+  return batch.total > 1 ? `${batch.name} · ${batch.position}/${batch.total}` : batch.name
+}
 function waitingReason(task: Task, summary?: Summary) {
   if (task.status === 'submission_unknown') return '需到官方请求页核实并关联远端 ID'
   if (task.error_message && task.next_retry_at) return '查询将重试：' + formatDate(task.next_retry_at)
@@ -168,9 +173,9 @@ export default function QueuePage() {
             <th>数据请求</th><th>状态</th><th className="remote-cell">远端请求 ID</th><th className="date-cell">提交时间</th><th>操作</th>
           </tr></thead>
           <tbody>{items.map(task => <tr key={task.id} className={selectedIds.has(task.id) ? 'is-selected' : undefined}>
-            <td className="selection-cell"><input type="checkbox" className="request-checkbox" aria-label={'选择请求 ' + task.title} checked={selectedIds.has(task.id)} onChange={() => toggleSelection(task.id)} /></td>
+            <td className="selection-cell"><input type="checkbox" className="request-checkbox" aria-label={'选择请求 ' + requestTitle(task)} checked={selectedIds.has(task.id)} onChange={() => toggleSelection(task.id)} /></td>
             <td>
-              <button type="button" className="text-button filename" onClick={() => setParams({ selected: task.id })}>{task.title}</button>
+              <button type="button" className="text-button filename" onClick={() => setParams({ selected: task.id })}>{requestTitle(task)}</button>
               <small>{directSources.get(task.dataset_id) ?? 'CDS'} · {task.dataset_id}</small>
             </td>
             <td><StatusBadge status={task.status} /><small>{waitingReason(task, summary.data)}</small></td>
@@ -210,6 +215,7 @@ function TaskDetails({ id, onClose }: { id: string; onClose: () => void }) {
         </button>
       </div>
       <ErrorNotice error={task.error || attach.error} />{task.isPending ? <Loading /> : task.data && <>
+        <p><strong>{requestTitle(task.data)}</strong></p>
         <dl><dt>本地请求 ID</dt><dd>{task.data.id}</dd><dt>状态</dt><dd><StatusBadge status={task.data.status} /></dd><dt>远端请求 ID</dt><dd>{task.data.remote_request_id || '—'}</dd><dt>账号</dt><dd>{task.data.account_id || '无需账号或尚未分配'}</dd><dt>最近查询</dt><dd>{formatDate(task.data.checked_at)}</dd><dt>查询重试</dt><dd>{task.data.retry_count} / {task.data.max_retries}</dd></dl>
         {task.data.error_message && <p className="notice error">{task.data.error_message}</p>}
         {task.data.status === 'cancelling' && <p className="notice">取消尚待远端确认，确认前不会标记为已取消。</p>}

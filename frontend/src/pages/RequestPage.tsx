@@ -35,6 +35,7 @@ function RequestEditor({ source, onSourceChange }: { source: keyof typeof source
   const [prefixInput, setPrefixInput] = useState('e5.oper.an.sfc/202401/')
   const [prefix, setPrefix] = useState('e5.oper.an.sfc/202401/')
   const [payload, setPayload] = useState<Payload>({})
+  const [requestName, setRequestName] = useState('')
   const [split, setSplit] = useState('none')
   const [splitCount, setSplitCount] = useState('2')
   const [detailsOpen, setDetailsOpen] = useState(false)
@@ -83,8 +84,9 @@ function RequestEditor({ source, onSourceChange }: { source: keyof typeof source
     const allowed = constraints.data?.source === 'online' ? constraints.data.constraints[name] : undefined
     return allowed !== undefined && (Array.isArray(value) ? value : [value]).some((item) => !allowed.some((option) => option === item)) ? [`${name}：当前组合不符合数据集约束，请调整选择。`] : []
   })
+  const defaultName = schema.data?.title.trim() || datasetId
   const create = useMutation({
-    mutationFn: () => api.createTasks(body),
+    mutationFn: () => api.createTasks({ ...body, name: requestName.trim() || defaultName }),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ['tasks'] })
       void queryClient.invalidateQueries({ queryKey: ['summary'] })
@@ -188,6 +190,10 @@ function RequestEditor({ source, onSourceChange }: { source: keyof typeof source
         <section className="panel request-output" aria-label="请求拆分与提交">
           <h2>请求拆分与提交</h2>
           <fieldset disabled={create.isPending}>
+            <label className="request-name">请求名称
+              <input value={requestName} placeholder={defaultName}
+                onChange={event => { setRequestName(event.target.value); create.reset() }} />
+            </label>
             <section className="output-section" aria-label="请求拆分">
               <CardSelect label="拆分方式" showLabel value={split} onChange={value => { setSplit(value); create.reset() }}
                 options={splitOptions.map(option => option.value === 'none' || canSplit(option.value) ? option : {

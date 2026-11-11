@@ -497,6 +497,7 @@ body:has(.request-builder-page) .nav-link.active { background: transparent; bord
 .request-output { padding: 20px; border-radius: 8px; }
 .request-output > h2 { margin: 0 0 16px; font-size: 15px; }
 .request-builder-page .request-output .output-section { padding-top: 0; }
+.request-name { margin-bottom: 12px; }
 .split-count { margin-top: 12px; }
 .request-output .output-fields { grid-template-columns: minmax(0, 1fr); gap: 14px; }
 .request-builder-page .request-output .form-actions { display: flex; flex-direction: column; align-items: stretch; gap: 10px; margin-top: 16px; padding-top: 16px; }

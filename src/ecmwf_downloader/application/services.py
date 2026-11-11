@@ -82,6 +82,7 @@ class TaskService:
         split_strategy: SplitStrategy = SplitStrategy.NONE,
         split_count: int | None = None,
         max_retries: Optional[int] = None,
+        name: Optional[str] = None,
         schema_revision: Optional[str] = None,
         editor_values: Optional[dict[str, Any]] = None,
     ) -> list[TaskData]:
@@ -93,17 +94,13 @@ class TaskService:
             split_strategy=split_strategy,
             split_count=split_count,
         )
-        tasks = [
-            self.tasks.create(
-                dataset_id=dataset_id,
-                request_payload=plan.payload,
-                title=plan.label,
-                split_strategy=split_strategy,
-                max_retries=max_retries if max_retries is not None else self.settings.requests.max_retries,
-            )
-            for plan in plans
-        ]
-        return tasks
+        return self.tasks.create_batch(
+            dataset_id=dataset_id,
+            items=[(plan.payload, plan.label) for plan in plans],
+            name=(name or "").strip() or dataset_id,
+            split_strategy=split_strategy,
+            max_retries=max_retries if max_retries is not None else self.settings.requests.max_retries,
+        )
 
     def get(self, task_id: str) -> Optional[TaskData]:
         return self.tasks.get(task_id)

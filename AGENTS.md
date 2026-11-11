@@ -28,6 +28,7 @@
 - 镜像为 mirror-ncar-era5、mirror-ncar-gdex-era5，分别列目录并用 HEAD 读取文件响应头、返回 HTTPS 链接；一个原文件一个任务，不裁剪或日期拆分，不需要或修改 CDS 账号统计。
 - mirror-arco-era5 已移除，不提供本地 Zarr/NetCDF 导出或伪造远端子集链接。相关可选依赖和 cdsapi 已移除。
 - 新 request_tasks/request_events 保存编译请求、绑定账号、远端 ID/状态与资产列表；原 tasks/task_events 保留但不导入新队列，不清空、删除或重建用户数据库及文件。
+- request_batch_items 独立保存提交名称、批次 ID、计划序号和原总份数，与新请求一并入库。旧请求无批次记录时沿用原标题。
 - SQLAlchemy create_all 只建缺失表，无 Alembic、自动 ALTER TABLE 或数据库重建；后续新字段须单独确认。
 - 单一队列自动提交，状态 queued/submitting/accepted/running/refreshing/completed/failed/cancelling/cancelled/expired/submission_unknown；completed 仅表示链接就绪，没有远端百分比就只显示状态。
 - 成功提交立即保存远端 ID 和账号；重启按 ID 继续查询。查询退避重试不重新提交；不明确 POST/中断进入待核实，核对后关联 ID，禁止盲目重发。

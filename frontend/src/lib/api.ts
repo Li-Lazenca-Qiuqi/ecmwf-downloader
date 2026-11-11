@@ -5,6 +5,7 @@ export type Task = {
   dataset_id: string
   request_payload: Record<string, unknown>
   title: string
+  batch?: { batch_id: string; name: string; position: number; total: number } | null
   status: TaskStatus
   remote_request_id: string | null
   remote_status: string | null
@@ -89,7 +90,7 @@ export const api = {
   tasks: (params = '') => request<{ items: Task[]; total: number }>(`/api/v1/tasks${params}`),
   task: (id: string) => request<Task>(`/api/v1/tasks/${id}`),
   preview: (body: RequestBody) => post<{ items: RequestPreviewItem[]; warnings: string[] }>('/api/v1/requests/preview', body),
-  createTasks: (body: RequestBody) => post<{ items: Task[] }>('/api/v1/tasks', body),
+  createTasks: (body: RequestBody & { name: string }) => post<{ items: Task[] }>('/api/v1/tasks', body),
   action: (id: string, action: 'cancel' | 'retry' | 'refresh') => post<Task>(`/api/v1/tasks/${id}/${action}`),
   deleteTask: (id: string) => request(`/api/v1/tasks/${id}`, { method: 'DELETE' }),
   attach: (id: string, remote_request_id: string) => post<Task>('/api/v1/tasks/' + id + '/attach', { remote_request_id }),

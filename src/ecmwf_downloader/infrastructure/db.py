@@ -12,13 +12,15 @@ from sqlalchemy import (
     Boolean,
     DateTime,
     Float,
+    ForeignKey,
     Integer,
     String,
     Text,
+    UniqueConstraint,
     create_engine,
     event,
 )
-from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column
+from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, relationship
 
 
 def json_dumps(value: Any) -> str:
@@ -65,6 +67,22 @@ class TaskRow(Base):
     started_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
     completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
     version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+
+    batch: Mapped[Optional[RequestBatchItemRow]] = relationship(
+        lazy="joined", cascade="all, delete-orphan", passive_deletes=True,
+    )
+
+
+class RequestBatchItemRow(Base):
+    __tablename__ = "request_batch_items"
+    __table_args__ = (UniqueConstraint("batch_id", "position"),)
+
+    task_id: Mapped[str] = mapped_column(ForeignKey("request_tasks.id", ondelete="CASCADE"), primary_key=True)
+    batch_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    name: Mapped[str] = mapped_column(Text, nullable=False)
+    position: Mapped[int] = mapped_column(Integer, nullable=False)
+    total: Mapped[int] = mapped_column(Integer, nullable=False)
+
 
 class TaskEventRow(Base):
     __tablename__ = "request_events"

@@ -1,15 +1,18 @@
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timezone
 from pathlib import Path
 from uuid import UUID
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy.exc import IntegrityError
 from typer.testing import CliRunner
 
 from ecmwf_downloader.application.container import AppContainer
 from ecmwf_downloader.application.worker import RequestScheduler
 from ecmwf_downloader.config import AppSettings, load_settings
 from ecmwf_downloader.infrastructure import yaml_file
+from ecmwf_downloader.infrastructure.db import Database, TaskRow
 from ecmwf_downloader.interfaces.cli import app as cli_app
 from ecmwf_downloader.interfaces.http.app import create_app
 
@@ -61,6 +64,93 @@ def test_api_create_preview_and_cancel(tmp_path: Path):
         assert client.post(f"/api/v1/tasks/{task_id}/enqueue").status_code in {404, 405}
         assert client.post(f"/api/v1/tasks/{task_id}/cancel").json()["status"] == "cancelled"
         assert client.post("/api/v1/tasks/actions/delete", json={"task_ids": [task_id]}).json() == {"affected": 1}
+
+
+def test_named_batch_preserves_positions_and_legacy_rows(tmp_path):
+    settings = AppSettings(database_path=tmp_path / "requests.sqlite3", config_dir=tmp_path / "config")
+    old_database = Database(settings.database_path)
+    try:
+        TaskRow.__table__.create(old_database.engine)
+        now = datetime.now(timezone.utc)
+        with old_database.session() as session:
+            session.execute(TaskRow.__table__.insert().values(
+                id="legacy", dataset_id="test", request_payload="{}", title="原请求名",
+                status="completed", created_at=now, updated_at=now,
+            ))
+    finally:
+        old_database.engine.dispose()
+
+    def make_container():
+        container = AppContainer(settings)
+        return container, TestClient(create_app(container, with_worker=False))
+
+    container, client = make_container()
+    try:
+        with client:
+            legacy = client.get("/api/v1/tasks/legacy").json()
+            assert legacy["title"] == "原请求名" and legacy["batch"] is None
+
+            body = {"dataset_id": "test", "name": " 地表温度 ", "split_strategy": "month",
+                    "request_payload": {"year": ["2024"], "month": ["01", "02", "03"]}}
+            response = client.post("/api/v1/tasks", json=body)
+            assert response.status_code == 200
+            first, second, third = response.json()["items"]
+            batch_id = first["batch"]["batch_id"]
+            for position, task in enumerate((first, second, third), start=1):
+                assert task["batch"] == {"batch_id": batch_id, "name": "地表温度", "position": position, "total": 3}
+            assert first["title"] == "test · 2024_01"
+            page = client.get("/api/v1/tasks", params={"search": "地表温度", "limit": 1, "offset": 1}).json()
+            assert page["total"] == 3 and page["items"][0]["id"] == second["id"]
+
+            assert client.post(f"/api/v1/tasks/{first['id']}/cancel").status_code == 200
+            assert client.delete(f"/api/v1/tasks/{first['id']}").status_code == 200
+            assert client.post(f"/api/v1/tasks/{third['id']}/cancel").status_code == 200
+            retried = client.post(f"/api/v1/tasks/{third['id']}/retry").json()
+            assert retried["batch"] == third["batch"]
+
+            single = client.post("/api/v1/tasks", json={"dataset_id": "test", "request_payload": {}}).json()["items"][0]
+            assert single["batch"]["name"] == "test" and single["batch"]["total"] == 1
+            assert single["batch"]["batch_id"] != batch_id
+    finally:
+        container.database.engine.dispose()
+
+    container, client = make_container()
+    try:
+        with client:
+            page = client.get("/api/v1/tasks", params={"search": "地表温度", "status": "queued"}).json()
+            assert [task["id"] for task in page["items"]] == [second["id"], third["id"]]
+            assert [task["batch"]["position"] for task in page["items"]] == [2, 3]
+            assert all(task["batch"]["total"] == 3 for task in page["items"])
+            assert client.get("/api/v1/tasks/legacy").json() == legacy
+    finally:
+        container.database.engine.dispose()
+
+
+def test_ncar_batch_rolls_back_if_member_cannot_be_saved(tmp_path):
+    settings = AppSettings(database_path=tmp_path / "requests.sqlite3", config_dir=tmp_path / "config")
+    container = AppContainer(settings)
+    try:
+        with container.database.engine.begin() as connection:
+            connection.exec_driver_sql("""
+                CREATE TRIGGER reject_second_member BEFORE INSERT ON request_batch_items
+                WHEN NEW.position = 2 BEGIN SELECT RAISE(ABORT, 'test failure'); END
+            """)
+        body = {"dataset_id": "mirror-ncar-era5", "name": "NCAR 地表数据",
+                "request_payload": {"object_key": ["e5.oper.an.sfc/202401/first.nc", "e5.oper.an.sfc/202401/second.nc"]}}
+        with TestClient(create_app(container, with_worker=False)) as client:
+            with pytest.raises(IntegrityError, match="test failure"):
+                client.post("/api/v1/tasks", json=body)
+            assert client.get("/api/v1/tasks").json()["total"] == 0
+            assert container.tasks_repository.events_after() == []
+            with container.database.engine.begin() as connection:
+                assert connection.exec_driver_sql("SELECT count(*) FROM request_batch_items").scalar_one() == 0
+                connection.exec_driver_sql("DROP TRIGGER reject_second_member")
+            items = client.post("/api/v1/tasks", json=body).json()["items"]
+            assert [task["batch"]["position"] for task in items] == [1, 2]
+            assert {task["batch"]["name"] for task in items} == {"NCAR 地表数据"}
+            assert len({task["batch"]["batch_id"] for task in items}) == 1
+    finally:
+        container.database.engine.dispose()
 
 
 def test_api_validation_uses_problem_json(tmp_path: Path):

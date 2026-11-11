@@ -62,12 +62,19 @@ class ResultAsset(BaseModel):
     content_type: Optional[str] = None
     expires_at: Optional[datetime] = None
 
+class TaskBatch(BaseModel):
+    batch_id: str
+    name: str
+    position: int
+    total: int
+
 class TaskData(BaseModel):
     model_config = ConfigDict(extra="forbid")
     id: str
     dataset_id: str
     request_payload: dict[str, Any]
     title: str
+    batch: Optional[TaskBatch] = None
     status: TaskStatus
     split_strategy: SplitStrategy = SplitStrategy.NONE
     remote_request_id: Optional[str] = None
