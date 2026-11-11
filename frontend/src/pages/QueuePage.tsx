@@ -2,10 +2,11 @@ import { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { Link, useSearchParams } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { ChevronLeft, ChevronRight, Plus, RefreshCw, Search, X, Copy, RotateCw, Trash2 } from 'lucide-react'
+import { ChevronLeft, ChevronRight, Plus, RefreshCw, Search, X, Copy, RotateCw, Trash2, File } from 'lucide-react'
 import { api, type Task, type Summary } from '../lib/api'
 import { ErrorNotice, Loading, StatusBadge, formatBytes, formatDate, statusLabels } from '../components'
 import CardSelect from '../CardSelect'
+import RequestParameterViews from '../features/request/RequestParameterViews'
 
 const pageSize = 10
 const statusOptions = [{ value: '', label: '全部状态' }, ...Object.entries(statusLabels).map(([value, label]) => ({ value, label }))]
@@ -200,6 +201,7 @@ export default function QueuePage() {
 function TaskDetails({ id, onClose }: { id: string; onClose: () => void }) {
   const dialog = useRef<HTMLDialogElement>(null)
   const task = useQuery({ queryKey: ['tasks', 'detail', id], queryFn: () => api.task(id), refetchInterval: 5000 })
+  const request = task.data
   const [remoteId, setRemoteId] = useState('')
   const client = useQueryClient()
   const links = useLinkCopy()
@@ -216,26 +218,60 @@ function TaskDetails({ id, onClose }: { id: string; onClose: () => void }) {
   return createPortal(<dialog ref={dialog} className="panel task-details" aria-labelledby="task-details-title"
     onCancel={event => { event.preventDefault(); close() }}
     onClick={event => { if (event.target === event.currentTarget) close() }}>
+    <div className="section-heading task-details-header">
+      <h2 id="task-details-title">请求详情</h2>
+      <button type="button" className="task-icon-button" onClick={close} title="关闭请求详情" aria-label="关闭请求详情">
+        <X size={18} aria-hidden="true" />
+      </button>
+    </div>
     <div className="task-details-content">
-      <div className="section-heading">
-        <h2 id="task-details-title">请求详情</h2>
-        <button type="button" className="task-icon-button" onClick={close} title="关闭请求详情" aria-label="关闭请求详情">
-          <X size={18} aria-hidden="true" />
-        </button>
-      </div>
-      <ErrorNotice error={task.error || attach.error} />{task.isPending ? <Loading /> : task.data && <>
-        <p><strong>{requestTitle(task.data)}</strong></p>
-        <dl><dt>本地请求 ID</dt><dd>{task.data.id}</dd><dt>状态</dt><dd><StatusBadge status={task.data.status} /></dd><dt>远端请求 ID</dt><dd>{task.data.remote_request_id || '—'}</dd><dt>账号</dt><dd>{task.data.account_id || '无需账号或尚未分配'}</dd><dt>最近查询</dt><dd>{formatDate(task.data.checked_at)}</dd><dt>查询重试</dt><dd>{task.data.retry_count} / {task.data.max_retries}</dd></dl>
-        {task.data.error_message && <p className="notice error">{task.data.error_message}</p>}
-        {task.data.status === 'cancelling' && <p className="notice">取消尚待远端确认，确认前不会标记为已取消。</p>}
-        {task.data.status === 'submission_unknown' && <div className="request-attach"><p className="helper">请先在官方请求页核实，再关联同一账号、数据集和参数的远端 ID；不会自动重复提交。</p><label>远端请求 ID<input aria-label="关联远端请求 ID" value={remoteId} onChange={event => setRemoteId(event.target.value)} /></label><button type="button" className="button" disabled={!remoteId.trim() || attach.isPending} onClick={() => attach.mutate()}>关联并继续</button></div>}
-        {task.data.status === 'completed' && <div className="request-results" aria-label="结果链接">
-          <h3>结果链接</h3><p className="helper">复制到专业下载器使用；源站缓存清理后链接可能失效。</p>
-          {task.data.results.map((asset, index) => <section className="result-asset" key={asset.url}><strong>{asset.filename || '结果 ' + (index + 1)}</strong><input aria-label={'下载链接 ' + (index + 1)} value={asset.url} readOnly onFocus={event => event.target.select()} /><div className="result-meta"><span>{asset.size === null ? '大小未提供' : formatBytes(asset.size)}</span><span>{asset.content_type || '类型未提供'}</span><span>{asset.expires_at ? '有效期至 ' + formatDate(asset.expires_at) : '有效期未提供'}</span></div><button type="button" className="button" onClick={() => void links.copy([asset.url])}><Copy size={14} />复制此链接</button></section>)}
-          {links.message && <p className="helper" role="status">{links.message}</p>}
+      <ErrorNotice error={task.error || attach.error} />
+      {task.isPending ? <Loading /> : request && <>
+        <div className="task-details-summary">
+          <div>
+            <strong>{requestTitle(request)}</strong>
+            <p>{directSources.get(request.dataset_id) ?? 'CDS'} · {request.dataset_id}</p>
+          </div>
+          <StatusBadge status={request.status} />
+        </div>
+        <dl className="task-details-metadata">
+          <div><dt>本地请求 ID</dt><dd><code>{request.id}</code></dd></div>
+          <div><dt>远端请求 ID</dt><dd><code>{request.remote_request_id || '—'}</code></dd></div>
+          <div><dt>账号</dt><dd>{request.account_id || '无需账号或尚未分配'}</dd></div>
+          <div><dt>最近查询</dt><dd>{formatDate(request.checked_at)}</dd></div>
+          <div><dt>查询重试</dt><dd>{request.retry_count} / {request.max_retries}</dd></div>
+        </dl>
+        {request.error_message && <p className="notice error">{request.error_message}</p>}
+        {request.status === 'cancelling' && <p className="notice">取消尚待远端确认，确认前不会标记为已取消。</p>}
+        {request.status === 'submission_unknown' && <div className="request-attach">
+          <p className="helper">请先在官方请求页核实，再关联同一账号、数据集和参数的远端 ID；不会自动重复提交。</p>
+          <label>远端请求 ID<input aria-label="关联远端请求 ID" value={remoteId} onChange={event => setRemoteId(event.target.value)} /></label>
+          <button type="button" className="button" disabled={!remoteId.trim() || attach.isPending} onClick={() => attach.mutate()}>关联并继续</button>
         </div>}
-        {task.data.status === 'expired' && <p className="notice">远端结果已不可用；可通过“重新提交”明确发起新请求。</p>}
-        <details><summary>请求参数</summary><pre>{JSON.stringify(task.data.request_payload, null, 2)}</pre></details>
+        {request.status === 'completed' && <section className="request-results" aria-labelledby="task-results-title">
+          <h3 id="task-results-title">结果链接</h3>
+          {request.results.map((asset, index) => <div className="result-asset" key={asset.url}>
+            <div className="result-asset-heading">
+              <div className="result-asset-file">
+                <File size={20} aria-hidden="true" />
+                <div>
+                  <strong>{asset.filename || '结果 ' + (index + 1)}</strong>
+                  <div className="result-meta">
+                    <span>{asset.size === null ? '大小未提供' : formatBytes(asset.size)}</span>
+                    <span>{asset.content_type || '类型未提供'}</span>
+                    <span>{asset.expires_at ? '有效期至 ' + formatDate(asset.expires_at) : '有效期未提供'}</span>
+                  </div>
+                </div>
+              </div>
+              <button type="button" className="button" onClick={() => void links.copy([asset.url])}><Copy size={14} />复制此链接</button>
+            </div>
+            <input aria-label={'下载链接 ' + (index + 1)} value={asset.url} readOnly onFocus={event => event.target.select()} />
+          </div>)}
+          <p className="helper">复制到专业下载器使用，源站缓存清理后链接可能失效。</p>
+          {links.message && <p className="helper" role="status">{links.message}</p>}
+        </section>}
+        {request.status === 'expired' && <p className="notice">远端结果已不可用。可通过“重新提交”发起新请求。</p>}
+        <RequestParameterViews payload={request.request_payload} heading="请求参数" />
       </>}
     </div>
   </dialog>, document.body)
