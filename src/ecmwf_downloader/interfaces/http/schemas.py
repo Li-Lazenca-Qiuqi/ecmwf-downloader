@@ -25,6 +25,7 @@ class PreviewBody(CostingBody):
 
 
 class TaskCreateBody(PreviewBody):
+    account_ids: list[str] | None = None
     name: Optional[str] = None
     max_retries: Optional[int] = Field(default=None, ge=0, le=20)
 

@@ -142,9 +142,11 @@ class RequestScheduler:
 
     def _fill_slots(self):
         while not self._stop.is_set() and self.active_count < self.max_workers:
-            account = self.container.accounts.next_available()
+            accounts = self.container.accounts.active_accounts()
+            account = self.container.accounts.next_available(accounts)
             task = self.container.tasks_repository.claim_next(
                 self.owner_id, account_id=account['id'] if account else None,
+                available_account_ids=[candidate['id'] for candidate in accounts],
                 mirror_ids=FILE_MIRROR_IDS, exclude_ids=set(self._active), lease_name=self.LEASE_NAME)
             if task is None:
                 return

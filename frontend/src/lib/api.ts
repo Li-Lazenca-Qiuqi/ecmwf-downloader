@@ -16,6 +16,7 @@ export type Task = {
   next_retry_at: string | null
   error_message: string | null
   account_id: string | null
+  submission_account_id?: string | null
   cancel_requested: boolean
   created_at: string
 }
@@ -98,7 +99,7 @@ export const api = {
   tasks: (params = '') => request<{ items: Task[]; total: number }>(`/api/v1/tasks${params}`),
   task: (id: string) => request<Task>(`/api/v1/tasks/${id}`),
   preview: (body: RequestBody) => post<{ items: RequestPreviewItem[]; warnings: string[] }>('/api/v1/requests/preview', body),
-  createTasks: (body: RequestBody & { name: string }) => post<{ items: Task[] }>('/api/v1/tasks', body),
+  createTasks: (body: RequestBody & { name: string; account_ids?: string[] }) => post<{ items: Task[] }>('/api/v1/tasks', body),
   action: (id: string, action: 'cancel' | 'retry' | 'refresh') => post<Task>(`/api/v1/tasks/${id}/${action}`),
   deleteTask: (id: string) => request(`/api/v1/tasks/${id}`, { method: 'DELETE' }),
   attach: (id: string, remote_request_id: string) => post<Task>('/api/v1/tasks/' + id + '/attach', { remote_request_id }),

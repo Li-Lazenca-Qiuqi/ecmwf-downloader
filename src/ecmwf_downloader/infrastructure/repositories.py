@@ -25,6 +25,7 @@ from ecmwf_downloader.infrastructure.db import (
     AccountStateRow,
     Database,
     RequestBatchItemRow,
+    RequestSubmissionAccountRow,
     RequestTemplateRow,
     SchedulerLeaseRow,
     TaskEventRow,
@@ -48,12 +49,13 @@ class TaskRepository:
     def _to_data(row):
         data = {name: (json_loads(row.request_payload) if name == 'request_payload'
                        else json.loads(row.results) if name == 'results'
-                       else getattr(row, name)) for name in TaskData.model_fields if name != 'batch'}
+                       else getattr(row, name)) for name in TaskData.model_fields if name not in {'batch', 'submission_account_id'}}
         for name, value in data.items():
             if isinstance(value, datetime) and value.tzinfo is None:
                 data[name] = value.replace(tzinfo=timezone.utc)
         batch = TaskBatch.model_validate(row.batch, from_attributes=True) if row.batch else None
-        return TaskData(**data, batch=batch)
+        assigned = row.submission_account.account_id if row.submission_account else None
+        return TaskData(**data, batch=batch, submission_account_id=assigned)
 
     @staticmethod
     def _event(session, *, event_type, task_id, payload, now):
@@ -85,7 +87,7 @@ class TaskRepository:
                 payload["used_account_id"] = used_account_id
             self._event(session, event_type="task.status_changed", task_id=row.id, payload=payload, now=row.updated_at)
 
-    def create_batch(self, *, dataset_id, items, name, split_strategy, max_retries):
+    def create_batch(self, *, dataset_id, items, name, split_strategy, max_retries, account_ids=()):
         batch_id = str(uuid4())
         with self.database.session(immediate=True) as session:
             now = _utc_now()
@@ -97,6 +99,10 @@ class TaskRepository:
                               max_retries=max_retries, created_at=now, updated_at=now,
                               batch=RequestBatchItemRow(batch_id=batch_id, name=name,
                                                         position=position, total=len(items)))
+                if account_ids:
+                    row.submission_account = RequestSubmissionAccountRow(
+                        account_id=account_ids[(position - 1) % len(account_ids)],
+                    )
                 rows.append(row)
                 session.add(row)
                 self._event(session, event_type="task.created", task_id=row.id,
@@ -133,8 +139,11 @@ class TaskRepository:
             return {"total": sum(counts.values()), "by_status": counts,
                     "completed": counts.get(TaskStatus.COMPLETED.value, 0)}
 
-    def claim_next(self, worker_id, *, account_id=None, mirror_ids=frozenset(), exclude_ids=(), lease_seconds=60, lease_name=None):
+    def claim_next(self, worker_id, *, account_id=None, available_account_ids=None, mirror_ids=frozenset(),
+                   exclude_ids=(), lease_seconds=60, lease_name=None):
         now = _utc_now()
+        if available_account_ids is None:
+            available_account_ids = (account_id,) if account_id else ()
         with self.database.session(immediate=True) as session:
             if lease_name is not None:
                 lease = session.get(SchedulerLeaseRow, lease_name)
@@ -144,12 +153,19 @@ class TaskRepository:
                 if expires <= now:
                     return None
             active = [status.value for status in ACTIVE_STATUSES if status != TaskStatus.SUBMITTING]
-            due = select(TaskRow).outerjoin(TaskRow.batch).options(contains_eager(TaskRow.batch)).where(
+            assigned_account = RequestSubmissionAccountRow.account_id
+            queued_eligible = or_(
+                TaskRow.dataset_id.in_(mirror_ids),
+                assigned_account.in_(available_account_ids),
+                assigned_account.is_(None) & (account_id is not None),
+            )
+            due = select(TaskRow).outerjoin(TaskRow.batch).outerjoin(TaskRow.submission_account).options(
+                contains_eager(TaskRow.batch), contains_eager(TaskRow.submission_account),
+            ).where(
                 TaskRow.worker_id.is_(None), TaskRow.id.not_in(exclude_ids),
                 or_(TaskRow.next_retry_at.is_(None), TaskRow.next_retry_at <= now),
-                or_(TaskRow.status.in_(active),
-                    (TaskRow.status == 'queued') & (
-                        True if account_id else TaskRow.dataset_id.in_(mirror_ids))))
+                or_(TaskRow.status.in_(active), (TaskRow.status == 'queued') & queued_eligible),
+            )
             row = session.scalar(due.order_by(
                 case((TaskRow.status == 'cancelling', 0), (TaskRow.status == 'queued', 2), else_=1),
                 TaskRow.next_retry_at.asc(), TaskRow.created_at.asc(), RequestBatchItemRow.batch_id,
@@ -158,7 +174,10 @@ class TaskRepository:
             if row is None:
                 return None
             if row.status == 'queued':
-                row.account_id = None if row.dataset_id in mirror_ids else account_id
+                if row.submission_account:
+                    row.account_id = row.submission_account.account_id
+                else:
+                    row.account_id = None if row.dataset_id in mirror_ids else account_id
                 row.started_at = row.started_at or now
                 self._change(session, row, TaskStatus.SUBMITTING)
             row.worker_id = worker_id

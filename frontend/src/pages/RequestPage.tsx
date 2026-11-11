@@ -11,6 +11,7 @@ import DatasetPicker from '../features/request/DatasetPicker'
 import AIParameterPanel from '../features/request/AIParameterPanel'
 import RequestSizePanel from '../features/request/RequestSizePanel'
 import RequestDetailsDialog from '../features/request/RequestDetailsDialog'
+import RequestAccountPicker from '../features/request/RequestAccountPicker'
 
 const sources = { cds: 'CDS · Copernicus', ncar: 'NCAR AWS ERA5', gdex: 'NCAR GDEX ERA5' }
 const sourceOptions = Object.entries(sources).map(([value, label]) => ({ value: value as keyof typeof sources, label }))
@@ -36,6 +37,7 @@ function RequestEditor({ source, onSourceChange }: { source: keyof typeof source
   const [prefix, setPrefix] = useState('e5.oper.an.sfc/202401/')
   const [payload, setPayload] = useState<Payload>({})
   const [requestName, setRequestName] = useState('')
+  const [accountDraft, setAccountDraft] = useState<{ multiple: boolean; ids: string[] }>()
   const [split, setSplit] = useState('none')
   const [splitCount, setSplitCount] = useState('2')
   const [detailsOpen, setDetailsOpen] = useState(false)
@@ -45,6 +47,9 @@ function RequestEditor({ source, onSourceChange }: { source: keyof typeof source
   const version = useRef(0)
   const schema = useQuery({ queryKey: ['request-schema', datasetId, prefix], queryFn: () => api.schema(datasetId, false, prefix), enabled: !!datasetId, retry: false, staleTime: 300000 })
   const fileSource = schema.data?.capabilities?.file_selection ?? (source === 'ncar' || source === 'gdex')
+  const accounts = useQuery({ queryKey: ['accounts'], queryFn: api.accounts, enabled: !fileSource })
+  const availableAccounts = (accounts.data?.items ?? []).filter(account => account.status === 'active')
+    .sort((a, b) => a.today_used_count - b.today_used_count || a.email.localeCompare(b.email) || a.id.localeCompare(b.id))
   const fields = schema.data?.support_status === 'unavailable' ? [] : schema.data?.fields || []
   useEffect(() => {
     const identity = `${datasetId}/${schema.data?.revision || ''}`
@@ -76,7 +81,7 @@ function RequestEditor({ source, onSourceChange }: { source: keyof typeof source
   const selectionKey = JSON.stringify({ datasetId, revision: schema.data?.revision, compiled })
   const [stableSelection, setStableSelection] = useState(selectionKey)
   useEffect(() => { const timer = setTimeout(() => setStableSelection(selectionKey), 600); return () => clearTimeout(timer) }, [selectionKey])
-  const constraints = useQuery({ queryKey: ['request-constraints', selectionKey], queryFn: () => api.constraints(datasetId, compiled), enabled: loaded && stableSelection === selectionKey, retry: false })
+  const constraints = useQuery({ queryKey: ['request-constraints', selectionKey], queryFn: () => api.constraints(datasetId, compiled), enabled: loaded && !fileSource && stableSelection === selectionKey, retry: false })
   const constraintErrors = Object.entries(selection).flatMap(([name, value]) => {
     const field = fields.find((item) => item.name === name)
     if (!field?.options.length) return []
@@ -84,9 +89,18 @@ function RequestEditor({ source, onSourceChange }: { source: keyof typeof source
     const allowed = constraints.data?.source === 'online' ? constraints.data.constraints[name] : undefined
     return allowed !== undefined && (Array.isArray(value) ? value : [value]).some((item) => !allowed.some((option) => option === item)) ? [`${name}：当前组合不符合数据集约束，请调整选择。`] : []
   })
+  const currentPlan = valid && !preview.isError && stableBody === bodyKey ? preview.data : undefined
+  const requestCount = currentPlan?.items.length ?? 1
+  const multiple = requestCount > 1
+  const availableIds = availableAccounts.map(account => account.id)
+  const accountIds = (accountDraft?.multiple === multiple
+    ? availableIds.filter(id => accountDraft.ids.includes(id)) : availableIds).slice(0, requestCount)
   const defaultName = schema.data?.title.trim() || datasetId
   const create = useMutation({
-    mutationFn: () => api.createTasks({ ...body, name: requestName.trim() || defaultName }),
+    mutationFn: () => api.createTasks({
+      ...body, name: requestName.trim() || defaultName,
+      ...(!fileSource ? { account_ids: accountIds } : {}),
+    }),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ['tasks'] })
       void queryClient.invalidateQueries({ queryKey: ['summary'] })
@@ -151,9 +165,8 @@ function RequestEditor({ source, onSourceChange }: { source: keyof typeof source
     return dimensions.every(name => requestNames.has(name) || requestNames.has(`${name}s`))
   }
   const constraintsReady = stableSelection === selectionKey && !constraints.isFetching && (!!constraints.data || constraints.isError)
-  const currentPlan = valid && !preview.isError && stableBody === bodyKey ? preview.data : undefined
   const planReady = !!currentPlan && !schema.isFetching && !preview.isFetching
-  const canCreate = planReady && constraintsReady && !constraintErrors.length
+  const canCreate = planReady && (fileSource || (accountIds.length > 0 && !constraintErrors.length && (multiple || constraintsReady)))
   return <section className="page request-builder-page">
     <div className="page-heading request-heading">
       <div><h1>提交请求</h1><p>选择数据集和参数，提交后自动监视处理状态。</p></div>
@@ -172,7 +185,6 @@ function RequestEditor({ source, onSourceChange }: { source: keyof typeof source
           {schema.data?.diagnostics?.filter((item) => item.blocking).map((item) => <p className="notice error" key={`${item.code}/${item.field}`}>{item.message}</p>)}
           <FormFields key={`${datasetId}/${schema.data?.revision || ""}`} fields={fields} values={payload} onChange={changeField} constraints={constraints.data} />
           {constraints.data?.error && <p className="notice">{constraints.data.error}</p>}
-          {constraints.isFetching && <p className="helper" role="status">正在更新可选参数约束…</p>}
           {constraints.error && <p className="notice">约束服务暂不可用，当前只做本地检查，最终是否接受请求以数据来源响应为准。</p>}
           {constraintErrors.map((message) => <p className="notice error" key={message}>{message}</p>)}
         </>}</section>
@@ -204,24 +216,23 @@ function RequestEditor({ source, onSourceChange }: { source: keyof typeof source
                   onChange={event => { setSplitCount(event.target.value); create.reset() }} />
               </label>}
               {!countValid && <p className="inline-error" role="alert">请输入大于等于 2 的整数份数。</p>}
-              <p className="helper">结果就绪后，可在请求队列复制链接。</p>
             </section>
+            {!fileSource && <RequestAccountPicker accounts={availableAccounts} selected={accountIds}
+              limit={requestCount} loading={accounts.isPending} error={accounts.error}
+              onChange={ids => { setAccountDraft({ multiple, ids }); create.reset() }} />}
           </fieldset>
           {errors.length > 0 && loaded && <details className="validation-list">
             <summary>待补齐 {errors.length} 项参数</summary>
             {errors.map(message => <p key={message}>{message}</p>)}
           </details>}
           <ErrorNotice error={preview.error} />
-          {preview.isFetching && <p className="helper" role="status">正在计算请求预览…</p>}
-          {currentPlan && <p className="helper">将提交 {currentPlan.items.length} 个请求</p>}
           {currentPlan?.warnings?.map(message => <p className="notice" key={message}>{message}</p>)}
           {source === 'cds' && <RequestSizePanel body={body} ready={planReady} disabled={create.isPending} />}
           <ErrorNotice error={create.error} />
-          <div className="form-actions"><button type="submit" className="button primary" disabled={!canCreate || create.isPending}>{create.isPending ? <Loader2 size={16} className="spin" /> : <Send size={16} />}提交请求{currentPlan && canCreate ? `（${currentPlan.items.length} 个请求）` : ''}</button><Link className="button" to="/tasks">返回队列</Link></div>
+          <div className="form-actions"><button type="submit" className="button primary" disabled={!canCreate || create.isPending}>{create.isPending ? <Loader2 size={16} className="spin" /> : <Send size={16} />}{preview.isFetching ? '计算拆分…' : currentPlan && multiple ? `提交 ${requestCount} 个请求` : '提交请求'}</button><Link className="button" to="/tasks">返回队列</Link></div>
         </section>
       </div>
       <div className="panel request-details-footer">
-        <span>{currentPlan ? `${currentPlan.items.length} 个计划请求` : '当前参数草稿'}</span>
         <button type="button" className="button" aria-haspopup="dialog" aria-expanded={detailsOpen} onClick={() => setDetailsOpen(true)}><FileText size={15} aria-hidden="true" />显示请求详情</button>
       </div>
       {detailsOpen && <RequestDetailsDialog datasetId={datasetId} items={currentPlan?.items ?? []} draft={compiled} fields={fields} onClose={() => setDetailsOpen(false)} />}

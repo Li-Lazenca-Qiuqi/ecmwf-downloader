@@ -49,8 +49,8 @@ class AppContainer:
         self.lease_repository = LeaseRepository(self.database)
         self.account_state_repository = AccountStateRepository(self.database)
         self.template_repository = TemplateRepository(self.database)
-        self.tasks = TaskService(self.settings, self.tasks_repository)
         self.accounts = AccountService(self.secrets, self.account_state_repository, network=self._network_settings)
+        self.tasks = TaskService(self.settings, self.tasks_repository, self.accounts)
         self.templates = TemplateService(self.template_repository)
         self.datasets = DatasetService(network=self._network_settings)
         self.tasks.datasets = self.datasets

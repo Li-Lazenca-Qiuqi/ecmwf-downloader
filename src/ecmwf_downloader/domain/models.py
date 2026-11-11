@@ -86,6 +86,7 @@ class TaskData(BaseModel):
     next_retry_at: Optional[datetime] = None
     error_message: Optional[str] = None
     account_id: Optional[str] = None
+    submission_account_id: Optional[str] = None
     cancel_requested: bool = False
     created_at: datetime
     updated_at: datetime

@@ -26,15 +26,11 @@ export default function RequestSizePanel({ body, ready, disabled }: {
     <div className="section-heading"><h3>请求规模</h3><span className="size-percentage">{percentage === undefined ? "" : format(percentage) + "%"}</span></div>
     <div className={`size-track ${band} ${data && !current ? 'stale' : ''}`} role="progressbar" aria-label="请求规模占用" aria-valuemin={0} aria-valuemax={100} aria-valuenow={percentage === undefined ? undefined : Math.min(percentage, 100)} aria-valuetext={data && !current ? '参数已改变，结果待刷新' : percentage === undefined ? '尚未估算' : `${format(percentage)}%`}><span style={{ width: `${Math.min(percentage ?? 0, 100)}%` }} /></div>
     <dl className="size-values">
-      <div><dt>{(data ? result?.request_count !== undefined : split) ? '最大子请求规模' : '当前规模'}</dt><dd>{result?.cost === undefined ? '—' : format(result.cost)}</dd></div>
+      <div><dt>{current && result?.max_index ? `最大子请求 · 第 ${result.max_index} 份` : split ? '最大子请求规模' : '当前规模'}</dt><dd>{result?.cost === undefined ? '—' : format(result.cost)}</dd></div>
       <div><dt>单次上限</dt><dd>{result?.limit == null ? '—' : format(result.limit)}</dd></div>
     </dl>
     <button type="button" className="button" aria-label="刷新请求规模" disabled={!ready || disabled || costing.isPending} onClick={() => costing.mutate(snapshot)}>{costing.isPending ? <Loader2 size={14} className="spin" /> : <RefreshCw size={14} />}刷新估算</button>
-    <p className="helper">使用官方规模单位。修改请求参数或拆分后，请手动刷新。{current && result?.source === 'online' && result.limit == null && '源站未返回对应上限。'}</p>
-    {data && !current && <p className="size-status" role="status">请求或拆分已改变，请刷新估算。</p>}
-    {current && result?.source === 'online' && (result.request_count !== undefined
-      ? <p className="size-status" role="status">已估算 {result.request_count} 份，显示规模最大的第 {result.max_index} 份及其上限。</p>
-      : !exceeded && <p className="size-status" role="status">已按当前参数估算。</p>)}
+    {data && !current && <p className="size-status" role="status">估算待刷新</p>}
     {current && exceeded && <p className="inline-error" role="status">{split ? `有 ${result?.over_limit_count} 份超过各自的单次上限。` : '超过单次请求上限。'}请缩小范围或增加拆分份数。</p>}
     {current && band && <p className={`size-priority ${band}`}>
       {band === 'high' ? '规模较高' : '规模偏高'}。过大的请求可能在 CDS 队列中被降低优先级。{' '}

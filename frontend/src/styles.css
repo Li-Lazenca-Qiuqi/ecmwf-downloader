@@ -520,6 +520,13 @@ body:has(.request-builder-page) .nav-link.active { background: transparent; bord
 .request-output > h2 { margin: 0 0 16px; font-size: 15px; }
 .request-builder-page .request-output .output-section { padding-top: 0; }
 .request-name { margin-bottom: 12px; }
+.request-account-picker { margin-top: 12px; }
+.request-account-picker legend { padding: 0; margin-bottom: 8px; font-size: 13px; }
+.request-account-options { display: grid; gap: 6px; }
+.request-account-options .choice-card { margin: 0; }
+.request-account-options .choice-card span { overflow-wrap: anywhere; }
+.request-account-options .account-usage { margin-left: auto; white-space: nowrap; color: var(--muted); }
+.request-details-footer > .button { margin-left: auto; }
 .split-count { margin-top: 12px; }
 .request-output .output-fields { grid-template-columns: minmax(0, 1fr); gap: 14px; }
 .request-builder-page .request-output .form-actions { display: flex; flex-direction: column; align-items: stretch; gap: 10px; margin-top: 16px; padding-top: 16px; }

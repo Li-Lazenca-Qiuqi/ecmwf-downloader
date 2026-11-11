@@ -7,7 +7,7 @@ from typer.testing import CliRunner
 from ecmwf_downloader.application.container import AppContainer
 from ecmwf_downloader.application.worker import RequestEngine
 from ecmwf_downloader.config import AppSettings, RequestSettings
-from ecmwf_downloader.domain.models import SplitStrategy, TaskStatus
+from ecmwf_downloader.domain.models import AccountStatus, SplitStrategy, TaskStatus
 from ecmwf_downloader.infrastructure.cds import CDSProvider, ProviderError, SubmissionUncertain
 from ecmwf_downloader.infrastructure import repositories
 from ecmwf_downloader.infrastructure.db import TaskEventRow, TaskRow
@@ -141,6 +141,48 @@ def test_refresh_expiry_and_explicit_resubmission(container, monkeypatch):
     assert claim(container) is None
     again = container.tasks.retry(task.id)
     assert again.status == TaskStatus.QUEUED and again.remote_request_id is None
+
+def test_selected_accounts_are_assigned_per_part_and_wait_when_disabled(container, monkeypatch):
+    first = container.accounts.add(email='a@example.invalid', key='fixture', url='https://example.invalid', account_id='a')
+    second = container.accounts.add(email='b@example.invalid', key='fixture', url='https://example.invalid', account_id='b')
+    body = {'dataset_id': 'test', 'split_strategy': 'day', 'name': 'fixture',
+            'request_payload': {'year': ['2024'], 'month': ['01'], 'day': ['01', '02', '03']}}
+
+    with TestClient(create_app(container, with_worker=False)) as client:
+        invalid = client.post('/api/v1/tasks', json={**body, 'account_ids': [second.id, 'unavailable']})
+        assert invalid.status_code == 422
+        assert client.get('/api/v1/tasks').json()['total'] == 0
+        created = client.post('/api/v1/tasks', json={**body, 'account_ids': [second.id, first.id]})
+        assert created.status_code == 200
+        tasks = created.json()['items']
+        assert [row['submission_account_id'] for row in tasks] == ['b', 'a', 'b']
+        assert all(row['account_id'] is None and row['status'] == 'queued' for row in tasks)
+
+    container.accounts.set_status(second.id, AccountStatus.DISABLED)
+    repo = container.tasks_repository
+    eligible = [account['id'] for account in container.accounts.active_accounts()]
+    claimed = repo.claim_next('test-worker', account_id=first.id, available_account_ids=eligible)
+    assert claimed.id == tasks[1]['id'] and claimed.account_id == first.id
+    assert repo.claim_next('test-worker', account_id=first.id, available_account_ids=eligible) is None
+    assert repo.get(tasks[0]['id']).status == TaskStatus.QUEUED
+
+    container.accounts.set_status(second.id, AccountStatus.ACTIVE)
+    reopened = AppContainer(container.settings)
+    try:
+        claimed = reopened.tasks_repository.claim_next(
+            'test-worker', account_id=first.id,
+            available_account_ids=[account['id'] for account in reopened.accounts.active_accounts()],
+        )
+        assert claimed.id == tasks[0]['id'] and claimed.account_id == second.id
+        used = []
+        monkeypatch.setattr(CDSProvider, 'submit',
+                            lambda provider, *_args: used.append(provider.account['id']) or 'remote-selected')
+        RequestEngine(reopened).execute(claimed.id)
+        assert used == [second.id]
+        assert reopened.tasks.get(claimed.id).remote_request_id == 'remote-selected'
+    finally:
+        reopened.database.engine.dispose()
+
 
 @pytest.mark.parametrize('state', ['accepted', 'running'])
 def test_manual_refresh_schedules_poll_for_active_remote_request(container, monkeypatch, state):

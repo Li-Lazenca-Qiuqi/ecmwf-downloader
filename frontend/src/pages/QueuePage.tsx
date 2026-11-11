@@ -276,7 +276,7 @@ function TaskDetails({ id, onClose }: { id: string; onClose: () => void }) {
         <dl className="task-details-metadata">
           <div><dt>本地请求 ID</dt><dd><code>{request.id}</code></dd></div>
           <div><dt>远端请求 ID</dt><dd><code>{request.remote_request_id || '—'}</code></dd></div>
-          <div><dt>账号</dt><dd>{request.account_id || '无需账号或尚未分配'}</dd></div>
+          <div><dt>账号</dt><dd>{request.account_id || request.submission_account_id || '无需账号或尚未分配'}</dd></div>
           <div><dt>最近查询</dt><dd>{formatDate(request.checked_at)}</dd></div>
           <div><dt>查询重试</dt><dd>{request.retry_count} / {request.max_retries}</dd></div>
         </dl>

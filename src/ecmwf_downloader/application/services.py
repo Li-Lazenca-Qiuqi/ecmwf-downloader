@@ -14,6 +14,7 @@ from ecmwf_downloader.application.request_compiler import compile_request
 from ecmwf_downloader.config import AppSettings, NetworkProxySettings, public_service_url, service_url
 from ecmwf_downloader.domain.models import AccountData, AccountStatus, SplitStrategy, TaskData, TaskStatus
 from ecmwf_downloader.infrastructure.cds import CDSProvider
+from ecmwf_downloader.infrastructure.mirrors import FILE_MIRROR_IDS
 from ecmwf_downloader.infrastructure.repositories import (
     AccountStateRepository,
     TaskRepository,
@@ -23,9 +24,10 @@ from ecmwf_downloader.infrastructure.secrets import SecretStore
 
 
 class TaskService:
-    def __init__(self, settings: AppSettings, tasks: TaskRepository):
+    def __init__(self, settings: AppSettings, tasks: TaskRepository, accounts: AccountService):
         self.settings = settings
         self.tasks = tasks
+        self.accounts = accounts
         self.builder = RequestBuilder()
         self.datasets = None
 
@@ -83,6 +85,7 @@ class TaskService:
         split_count: int | None = None,
         max_retries: Optional[int] = None,
         name: Optional[str] = None,
+        account_ids: list[str] | None = None,
         schema_revision: Optional[str] = None,
         editor_values: Optional[dict[str, Any]] = None,
     ) -> list[TaskData]:
@@ -94,12 +97,21 @@ class TaskService:
             split_strategy=split_strategy,
             split_count=split_count,
         )
+        if account_ids is not None:
+            if dataset_id in FILE_MIRROR_IDS:
+                raise ValueError('镜像请求无需选择 CDS 账号')
+            if not account_ids or len(account_ids) > len(plans) or len(set(account_ids)) != len(account_ids):
+                raise ValueError('请选择账号，所选账号数不能超过请求份数')
+            active_ids = {account['id'] for account in self.accounts.active_accounts()}
+            if not set(account_ids) <= active_ids:
+                raise ValueError('所选账号已不可用，请重新选择')
         return self.tasks.create_batch(
             dataset_id=dataset_id,
             items=[(plan.payload, plan.label) for plan in plans],
             name=(name or "").strip() or dataset_id,
             split_strategy=split_strategy,
             max_retries=max_retries if max_retries is not None else self.settings.requests.max_retries,
+            account_ids=account_ids or (),
         )
 
     def get(self, task_id: str) -> Optional[TaskData]:
@@ -194,22 +206,24 @@ class AccountService:
         self.states.set_status(account_id, status.value)
         return next(item for item in self.list() if item.id == account_id)
 
-    def next_available(self) -> Optional[dict[str, Any]]:
+    def active_accounts(self) -> list[dict[str, Any]]:
         state = self.states.snapshot()
-        candidates = []
+        accounts = []
         for account in self.secrets.accounts(include_keys=True):
-            account_id = str(account.get("id", ""))
-            row = state.get(account_id)
+            row = state.get(str(account.get("id", "")))
             status = row.status if row else account.get("status", "active")
             if status == AccountStatus.ACTIVE.value:
-                candidates.append((row.used_count if row else 0, account_id, account))
-        candidates.sort(key=lambda item: item[1])
+                accounts.append(account)
+        return sorted(accounts, key=lambda account: account['id'])
+
+    def next_available(self, accounts: list[dict[str, Any]] | None = None) -> Optional[dict[str, Any]]:
+        candidates = self.active_accounts() if accounts is None else accounts
         if not candidates:
             return None
         with self._cursor_lock:
             selected = candidates[self._cursor % len(candidates)]
             self._cursor += 1
-        return selected[2]
+        return selected
 
     def record_success(self, account_id: str) -> None:
         self.states.mark_success(account_id)
