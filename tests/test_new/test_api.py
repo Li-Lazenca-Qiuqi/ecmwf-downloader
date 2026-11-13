@@ -284,3 +284,15 @@ def test_concurrent_settings_saves_merge_latest_file(configured_container):
         assert settings.max_workers == 2 and settings.poll_interval == 7
     finally:
         other.database.engine.dispose()
+
+
+def test_request_preset_does_not_replace_legacy_template(tmp_path):
+    settings = AppSettings(database_path=tmp_path / "requests.sqlite3", config_dir=tmp_path / "config")
+    container = AppContainer(settings)
+    with TestClient(create_app(container, with_worker=False)) as client:
+        client.post("/api/v1/templates", json={"name": "现有模板", "payload": {"year": ["2024"]}}).raise_for_status()
+        preset = {"kind": "ecmwf-request-preset-v1", "editor_values": {"year": ["2025"]}}
+        assert client.post("/api/v1/templates", json={"name": "现有模板", "payload": preset}).status_code == 422
+        saved = client.post("/api/v1/templates", json={"name": "新预设", "payload": preset}).json()
+    reopened = AppContainer(settings)
+    assert reopened.templates.get(saved["id"])["payload"] == preset

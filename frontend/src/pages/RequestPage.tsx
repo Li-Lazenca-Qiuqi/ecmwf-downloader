@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
-import { Link, useNavigate } from 'react-router-dom'
+import { useNavigate } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Send, Loader2, ListFilter, FileText } from 'lucide-react'
+import { Loader2, ListFilter } from 'lucide-react'
 import { api, type RequestBody } from '../lib/api'
 import { ErrorNotice, Loading } from '../components'
 import CardSelect from '../CardSelect'
@@ -12,40 +12,43 @@ import AIParameterPanel from '../features/request/AIParameterPanel'
 import RequestSizePanel from '../features/request/RequestSizePanel'
 import RequestDetailsDialog from '../features/request/RequestDetailsDialog'
 import RequestAccountPicker from '../features/request/RequestAccountPicker'
+import { requestSchemaFreshMs, requestSchemaKey, sourceOptions, splitOptions } from '../features/request/requestOptions'
+import RequestPresets, { restorePresetValues, type Preset, type RequestSource } from '../features/request/RequestPresets'
 
-const sources = { cds: 'CDS · Copernicus', ncar: 'NCAR AWS ERA5', gdex: 'NCAR GDEX ERA5' }
-const sourceOptions = Object.entries(sources).map(([value, label]) => ({ value: value as keyof typeof sources, label }))
-const splitOptions = [
-  { value: 'none', label: '不拆分' },
-  { value: 'year', label: '按年' },
-  { value: 'month', label: '按月' },
-  { value: 'day', label: '按日' },
-  { value: 'smart', label: '按份数智能拆分' },
-]
+const initialPrefix = 'e5.oper.an.sfc/202401/'
 const initialDatasets = { ncar: 'mirror-ncar-era5', gdex: 'mirror-ncar-gdex-era5', cds: 'reanalysis-era5-single-levels' }
 export default function RequestPage() {
-  const [source, setSource] = useState<keyof typeof sources>('cds')
-  return <RequestEditor key={source} source={source} onSourceChange={setSource} />
+  const [editor, setEditor] = useState<{ source: RequestSource; generation: number; preset?: Preset }>({ source: 'cds', generation: 0 })
+  return <RequestEditor key={editor.generation} source={editor.source} preset={editor.preset}
+    onSourceChange={source => { if (source !== editor.source) setEditor({ source, generation: editor.generation + 1 }) }}
+    onLoadPreset={preset => setEditor({ source: preset.source, preset, generation: editor.generation + 1 })} />
 }
 
-function RequestEditor({ source, onSourceChange }: { source: keyof typeof sources; onSourceChange: (source: keyof typeof sources) => void }) {
+function RequestEditor({ source, preset, onSourceChange, onLoadPreset }: {
+  source: RequestSource
+  preset?: Preset
+  onSourceChange: (source: RequestSource) => void
+  onLoadPreset: (preset: Preset) => void
+}) {
   const navigate = useNavigate()
   const queryClient = useQueryClient()
-  const [datasetInput, setDatasetInput] = useState(initialDatasets[source])
-  const [datasetId, setDatasetId] = useState(initialDatasets[source])
-  const [prefixInput, setPrefixInput] = useState('e5.oper.an.sfc/202401/')
-  const [prefix, setPrefix] = useState('e5.oper.an.sfc/202401/')
+  const [datasetInput, setDatasetInput] = useState(preset?.dataset_id ?? initialDatasets[source])
+  const [datasetId, setDatasetId] = useState(datasetInput)
+  const [prefixInput, setPrefixInput] = useState(preset?.prefix ?? initialPrefix)
+  const [prefix, setPrefix] = useState(prefixInput)
   const [payload, setPayload] = useState<Payload>({})
   const [requestName, setRequestName] = useState('')
   const [accountDraft, setAccountDraft] = useState<{ multiple: boolean; ids: string[] }>()
-  const [split, setSplit] = useState('none')
-  const [splitCount, setSplitCount] = useState('2')
+  const [split, setSplit] = useState(preset?.split_strategy ?? 'none')
+  const [splitCount, setSplitCount] = useState(String(preset?.split_count ?? 2))
+  const [presetNotice, setPresetNotice] = useState('')
+  const pendingPreset = useRef(preset)
   const [detailsOpen, setDetailsOpen] = useState(false)
   const [aiNotice, setAiNotice] = useState('')
   const [aiUndo, setAiUndo] = useState<{ payload: Payload; version: number } | null>(null)
   const initialized = useRef('')
   const version = useRef(0)
-  const schema = useQuery({ queryKey: ['request-schema', datasetId, prefix], queryFn: () => api.schema(datasetId, false, prefix), enabled: !!datasetId, retry: false, staleTime: 300000 })
+  const schema = useQuery({ queryKey: requestSchemaKey(datasetId, prefix), queryFn: () => api.schema(datasetId, false, prefix), enabled: !!datasetId, retry: false, staleTime: requestSchemaFreshMs })
   const fileSource = schema.data?.capabilities?.file_selection ?? (source === 'ncar' || source === 'gdex')
   const accounts = useQuery({ queryKey: ['accounts'], queryFn: api.accounts, enabled: !fileSource })
   const availableAccounts = (accounts.data?.items ?? []).filter(account => account.status === 'active')
@@ -57,7 +60,14 @@ function RequestEditor({ source, onSourceChange }: { source: keyof typeof source
       const sameDataset = initialized.current.startsWith(`${datasetId}/`)
       initialized.current = identity
       version.current += 1
-      if (!sameDataset) setPayload(defaultsFor(schema.data.fields))
+      if (pendingPreset.current) {
+        const saved = pendingPreset.current
+        pendingPreset.current = undefined
+        const { values, changes } = restorePresetValues(schema.data.fields, saved.editor_values)
+        if (saved.split_strategy !== 'none' && !schema.data.capabilities?.split_strategies.includes(saved.split_strategy)) changes.push('拆分方式')
+        setPayload(values)
+        setPresetNotice(changes.length ? `请重新选择：${changes.join('、')}` : '')
+      } else if (!sameDataset) setPayload(defaultsFor(schema.data.fields))
       else { setAiNotice('字段定义已更新，已保留当前输入，请检查有效性或重置默认值。'); setAiUndo(null) }
       setSplit((current) => schema.data?.capabilities?.split_strategies.includes(current) ? current : 'none')
     }
@@ -155,7 +165,7 @@ function RequestEditor({ source, onSourceChange }: { source: keyof typeof source
     setAiUndo(null)
     suggestion.reset(); create.reset(); setAiNotice('')
     if (next !== datasetId) { initialized.current = ''; setPayload({}); setSplit('none'); setDatasetId(next) }
-    else void queryClient.fetchQuery({ queryKey: ['request-schema', next, prefix], queryFn: () => api.schema(next, true, prefix), staleTime: 0 })
+    else void queryClient.fetchQuery({ queryKey: requestSchemaKey(next, prefix), queryFn: () => api.schema(next, true, prefix), staleTime: 0 })
   }
   const requestNames = new Set(fields.filter((field) => field.request_field).map((field) => field.name))
   const canSplit = (strategy: string) => {
@@ -183,6 +193,7 @@ function RequestEditor({ source, onSourceChange }: { source: keyof typeof source
 
           {schema.data?.support_status === 'partial' && <p className="notice">部分字段尚待适配，可使用已支持的选择路径。</p>}
           {schema.data?.diagnostics?.filter((item) => item.blocking).map((item) => <p className="notice error" key={`${item.code}/${item.field}`}>{item.message}</p>)}
+          {presetNotice && <p className="notice" role="status">{presetNotice}</p>}
           <FormFields key={`${datasetId}/${schema.data?.revision || ""}`} fields={fields} values={payload} onChange={changeField} constraints={constraints.data} />
           {constraints.data?.error && <p className="notice">{constraints.data.error}</p>}
           {constraints.error && <p className="notice">约束服务暂不可用，当前只做本地检查，最终是否接受请求以数据来源响应为准。</p>}
@@ -229,11 +240,20 @@ function RequestEditor({ source, onSourceChange }: { source: keyof typeof source
           {currentPlan?.warnings?.map(message => <p className="notice" key={message}>{message}</p>)}
           {source === 'cds' && <RequestSizePanel body={body} ready={planReady} disabled={create.isPending} />}
           <ErrorNotice error={create.error} />
-          <div className="form-actions"><button type="submit" className="button primary" disabled={!canCreate || create.isPending}>{create.isPending ? <Loader2 size={16} className="spin" /> : <Send size={16} />}{preview.isFetching ? '计算拆分…' : currentPlan && multiple ? `提交 ${requestCount} 个请求` : '提交请求'}</button><Link className="button" to="/tasks">返回队列</Link></div>
+          <div className="form-actions">
+            <RequestPresets preset={{
+              kind: 'ecmwf-request-preset-v1', source, dataset_id: datasetId, prefix,
+              editor_values: selection, split_strategy: split,
+              ...(split === 'smart' && countValid ? { split_count: count } : {}),
+            }} canSave={valid && !schema.isFetching} disabled={create.isPending} onLoad={onLoadPreset}>
+              <button type="button" className="button" aria-haspopup="dialog" aria-expanded={detailsOpen}
+                onClick={() => setDetailsOpen(true)}>显示请求详情</button>
+              <button type="submit" className="button primary" disabled={!canCreate || create.isPending}>
+                {create.isPending ? '提交中…' : preview.isFetching ? '计算拆分…' : currentPlan && multiple ? `提交 ${requestCount} 个请求` : '提交请求'}
+              </button>
+            </RequestPresets>
+          </div>
         </section>
-      </div>
-      <div className="panel request-details-footer">
-        <button type="button" className="button" aria-haspopup="dialog" aria-expanded={detailsOpen} onClick={() => setDetailsOpen(true)}><FileText size={15} aria-hidden="true" />显示请求详情</button>
       </div>
       {detailsOpen && <RequestDetailsDialog datasetId={datasetId} items={currentPlan?.items ?? []} draft={compiled} fields={fields} onClose={() => setDetailsOpen(false)} />}
     </aside></form>

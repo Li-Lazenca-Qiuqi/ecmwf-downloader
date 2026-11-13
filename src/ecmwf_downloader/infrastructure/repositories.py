@@ -594,8 +594,11 @@ class TemplateRepository:
 
     def save(self, name: str, payload: dict[str, Any]) -> dict[str, Any]:
         now = _utc_now()
-        with self.database.session() as session:
+        with self.database.session(immediate=True) as session:
             row = session.scalar(select(RequestTemplateRow).where(RequestTemplateRow.name == name))
+            if row is not None and payload.get('kind') == 'ecmwf-request-preset-v1':
+                if json_loads(row.payload).get('kind') != 'ecmwf-request-preset-v1':
+                    raise ValueError('此名称已用于其他模板，请更换预设名称')
             if row is None:
                 row = RequestTemplateRow(id=str(uuid4()), name=name, payload=json_dumps(payload), created_at=now, updated_at=now)
                 session.add(row)

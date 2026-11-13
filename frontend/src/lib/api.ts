@@ -20,6 +20,7 @@ export type Task = {
   cancel_requested: boolean
   created_at: string
 }
+export type Template = { id: string; name: string; payload: Record<string, unknown> }
 export type Account = {
   id: string
   email: string
@@ -97,6 +98,12 @@ const post = <T,>(path: string, body?: unknown) => request<T>(path, { method: 'P
 export const api = {
   summary: () => request<Summary>('/api/v1/summary'),
   tasks: (params = '') => request<{ items: Task[]; total: number }>(`/api/v1/tasks${params}`),
+  templates: () => request<{ items: Template[] }>('/api/v1/templates'),
+  saveTemplate: (name: string, payload: Record<string, unknown>) =>
+    post<Template>('/api/v1/templates', { name, payload }),
+  deleteTemplate: (id: string) => request<{ deleted: boolean; id: string }>(
+    `/api/v1/templates/${encodeURIComponent(id)}`, { method: 'DELETE' },
+  ),
   task: (id: string) => request<Task>(`/api/v1/tasks/${id}`),
   preview: (body: RequestBody) => post<{ items: RequestPreviewItem[]; warnings: string[] }>('/api/v1/requests/preview', body),
   createTasks: (body: RequestBody & { name: string; account_ids?: string[] }) => post<{ items: Task[] }>('/api/v1/tasks', body),
