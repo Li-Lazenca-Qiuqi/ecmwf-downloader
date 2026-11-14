@@ -7,7 +7,7 @@ updated_date: '2026-11-14T02:53:00Z'
 ---
 # ECMWF Downloader 产品说明
 
-当前工作区定位：面向 Windows/Linux 的单用户 ECMWF/CDS 请求与结果链接管理工具，CLI 为主要入口，本地回环 HTTP 服务同源提供 API 和 Web，服务器通过 SSH 端口转发访问。当前版本号仍为 0.5.0；本轮没有发布新版本。
+当前工作区定位：以 Windows 原生为主要运行环境、同时支持 Linux/WSL 的单用户 ECMWF/CDS 请求与结果链接管理工具，CLI 为主要入口，本地回环 HTTP 服务同源提供 API 和 Web，服务器通过 SSH 端口转发访问。当前版本号仍为 0.5.0；本轮没有发布新版本。
 
 ## 核心流程与边界
 
@@ -89,7 +89,7 @@ requests 配置含 max_workers、poll_interval、max_retries、retry_delays；�
 SQLite WAL 保存 request_tasks、request_events、调度租约、账号运行状态和模板；通过 create_all 只创建缺失表。
 原 tasks/task_events、账号、其他配置和现有下载文件保留，不导入新请求队列、不清空、不重建；旧记录不伪装成结果链接。没有 Alembic 或自动 ALTER TABLE，后续结构变更须另行确认处理方案。 新批次使用独立的 request_batch_items 表，名称、份次和原总份数与请求在同一事务写入。
 本轮已移除当前 app.yaml 的旧 download 分组，保留其他配置并改用经过校验的 requests；secrets.yaml 未改写，专业下载器的目标目录由下载器管理。
-Linux/WSL 为当前验证环境，Windows 原生文件锁/权限与真实后台运行仍未验收。不能用字段分类覆盖或模拟测试替代全部数据集组合与真实源站验收。
+Windows 原生与 Linux/WSL 均参与定向验证。凭据初始化、读取和写入共用跨平台文件锁，Linux 保留 0600 权限。Windows 原生 CLI 与 Web 协同写入、启停及恢复已通过独立配置验证，远端使用模拟提供方。不能用字段分类覆盖或模拟测试替代全部数据集组合与真实源站验收。
 应用配置以同目录临时文件写入并同步后原子替换。并发更新串行读取并合并最新磁盘值，保存失败保留原配置和运行值。一次保存同时更新 AI 配置和 Key 时，若凭据写入失败会恢复原应用配置。应用配置和凭据各自原子替换。
 
 ## 当前验证证据

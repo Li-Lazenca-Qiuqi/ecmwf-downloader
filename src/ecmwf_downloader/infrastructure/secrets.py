@@ -4,13 +4,12 @@ from __future__ import annotations
 
 import copy
 import os
-from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Iterator, Optional
+from typing import Any, Optional
 
 import yaml
 
-from ecmwf_downloader.infrastructure.yaml_file import atomic_write_yaml
+from ecmwf_downloader.infrastructure.yaml_file import atomic_write_yaml, file_write_lock
 
 
 class SecretStoreError(RuntimeError):
@@ -28,31 +27,22 @@ class SecretStore:
         self.path = Path(path)
         self.lock_path = self.path.with_name(self.path.name + ".lock")
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        if not self.path.exists():
-            self._atomic_write({"version": 1, "accounts": [], "ai": {}})
-        self._ensure_permissions()
+        try:
+            with file_write_lock(self.path):
+                self._ensure_permissions()
+                if not self.path.exists():
+                    self._atomic_write({"version": 1, "accounts": [], "ai": {}})
+        except OSError:
+            raise SecretStoreError("无法初始化凭据文件，请检查权限。") from None
 
     def _ensure_permissions(self) -> None:
         try:
-            os.chmod(self.path, 0o600)
-            if self.lock_path.exists():
-                os.chmod(self.lock_path, 0o600)
+            os.chmod(self.lock_path, 0o600)
+            if self.path.exists():
+                os.chmod(self.path, 0o600)
         except OSError:
             # Windows development environments may not support POSIX modes.
             pass
-
-    @contextmanager
-    def _lock(self, exclusive: bool = False) -> Iterator[None]:
-        import fcntl
-
-        self.lock_path.touch(exist_ok=True)
-        self._ensure_permissions()
-        with self.lock_path.open("r+", encoding="utf-8") as lock_handle:
-            fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX if exclusive else fcntl.LOCK_SH)
-            try:
-                yield
-            finally:
-                fcntl.flock(lock_handle.fileno(), fcntl.LOCK_UN)
 
     def _read_unlocked(self) -> dict[str, Any]:
         try:
@@ -78,7 +68,7 @@ class SecretStore:
 
     def _update(self, callback) -> None:
         try:
-            with self._lock(exclusive=True):
+            with file_write_lock(self.path):
                 data = self._read_unlocked()
                 callback(data)
                 self._atomic_write(data)
@@ -86,8 +76,11 @@ class SecretStore:
             raise SecretStoreError("无法保存凭据文件，请检查权限与磁盘空间。") from None
 
     def snapshot(self) -> dict[str, Any]:
-        with self._lock():
-            return copy.deepcopy(self._read_unlocked())
+        try:
+            with file_write_lock(self.path):
+                return copy.deepcopy(self._read_unlocked())
+        except OSError:
+            raise SecretStoreError("无法读取凭据文件，请检查权限。") from None
 
     def accounts(self, include_keys: bool = False) -> list[dict[str, Any]]:
         accounts = self.snapshot().get("accounts", [])
