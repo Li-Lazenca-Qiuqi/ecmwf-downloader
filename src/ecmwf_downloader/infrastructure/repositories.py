@@ -8,7 +8,7 @@ from datetime import datetime, time, timedelta, timezone
 from typing import Any, Callable, Iterable, Optional
 from uuid import uuid4
 
-from sqlalchemy import case, func, or_, select
+from sqlalchemy import and_, case, func, or_, select, tuple_
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import aliased, contains_eager
 
@@ -115,7 +115,7 @@ class TaskRepository:
             row = session.get(TaskRow, task_id)
             return self._to_data(row) if row else None
 
-    def list(self, *, status=None, search=None, limit=50, offset=0):
+    def list(self, *, status=None, search=None, limit=50, offset=0, after=None):
         with self.database.session() as session:
             predicates = []
             if status:
@@ -127,11 +127,25 @@ class TaskRepository:
                                       TaskRow.batch.has(RequestBatchItemRow.name.like(needle))))
             query = select(TaskRow).outerjoin(TaskRow.batch).options(contains_eager(TaskRow.batch)).where(*predicates)
             total = session.scalar(select(func.count()).select_from(TaskRow).where(*predicates))
+            batch_key = func.coalesce(RequestBatchItemRow.batch_id, '')
+            position = func.coalesce(RequestBatchItemRow.position, 0)
+            if after is not None:
+                created, batch_id, part, task_id = after
+                query = query.where(or_(
+                    TaskRow.created_at < created,
+                    and_(TaskRow.created_at == created, tuple_(batch_key, position, TaskRow.id) > (batch_id, part, task_id)),
+                ))
             rows = session.scalars(query.order_by(
-                TaskRow.created_at.desc(), RequestBatchItemRow.batch_id,
-                RequestBatchItemRow.position, TaskRow.id,
+                TaskRow.created_at.desc(), batch_key, position, TaskRow.id,
             ).limit(limit).offset(offset))
             return [self._to_data(row) for row in rows], int(total or 0)
+
+    def list_batch(self, batch_id):
+        with self.database.session() as session:
+            rows = session.scalars(select(TaskRow).join(TaskRow.batch).options(
+                contains_eager(TaskRow.batch),
+            ).where(RequestBatchItemRow.batch_id == batch_id).order_by(RequestBatchItemRow.position))
+            return [self._to_data(row) for row in rows]
 
     def summary(self):
         with self.database.session() as session:

@@ -286,6 +286,40 @@ def test_concurrent_settings_saves_merge_latest_file(configured_container):
         other.database.engine.dispose()
 
 
+def test_queue_cursor_and_batch_links_survive_changes(tmp_path):
+    settings = AppSettings(database_path=tmp_path / "requests.sqlite3", config_dir=tmp_path / "config")
+    container = AppContainer(settings)
+    body = {
+        "dataset_id": "test", "name": "同名请求", "split_strategy": "day",
+        "request_payload": {"year": ["2024"], "month": ["01"], "day": [f"{day:02}" for day in range(1, 24)]},
+    }
+    with TestClient(create_app(container, with_worker=False)) as client:
+        original = client.post("/api/v1/tasks", json=body).json()["items"]
+        assert len(original) == 23
+        batch_id = original[0]["batch"]["batch_id"]
+        page = client.get("/api/v1/tasks", params={"cursor": "", "limit": 20}).json()
+        assert [row["id"] for row in page["items"]] == [row["id"] for row in original[:20]]
+
+        client.post("/api/v1/tasks", json={**body, "split_strategy": "none"}).raise_for_status()
+        deleted = original[19]["id"]
+        client.post(f"/api/v1/tasks/{deleted}/cancel").raise_for_status()
+        client.delete(f"/api/v1/tasks/{deleted}").raise_for_status()
+        tail = client.get("/api/v1/tasks", params={"cursor": page["next_cursor"], "limit": 20}).json()
+        assert [row["id"] for row in tail["items"]] == [row["id"] for row in original[20:]]
+        assert tail["next_cursor"] is None
+        assert client.get("/api/v1/tasks", params={"cursor": "invalid"}).status_code == 422
+
+        with container.database.session(immediate=True) as session:
+            row = session.get(TaskRow, original[-1]["id"])
+            row.status = "completed"
+            row.results = '[{"url":"https://example.test/last"}]'
+        batch = client.get(f"/api/v1/request-batches/{batch_id}").json()
+        assert batch["name"] == body["name"] and batch["total"] == 23
+        assert [item["position"] for item in batch["items"]] == [*range(1, 20), 21, 22, 23]
+        assert [link for item in batch["items"] for link in item["links"]] == ["https://example.test/last"]
+        assert client.get("/api/v1/request-batches/missing").status_code == 404
+
+
 def test_request_preset_does_not_replace_legacy_template(tmp_path):
     settings = AppSettings(database_path=tmp_path / "requests.sqlite3", config_dir=tmp_path / "config")
     container = AppContainer(settings)

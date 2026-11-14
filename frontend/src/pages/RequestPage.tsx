@@ -2,10 +2,11 @@ import { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useNavigate } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { CircleCheck, Loader2, ListFilter } from 'lucide-react'
+import { Loader2, ListFilter } from 'lucide-react'
 import { api, type RequestBody } from '../lib/api'
 import { ErrorNotice, Loading } from '../components'
 import CardSelect from '../CardSelect'
+import SuccessToast, { useSuccessToast } from '../SuccessToast'
 import { defaultsFor, fieldErrors, activeValues, requestPayload, type Payload } from '../requestFields'
 import FormFields from '../features/request/FormFields'
 import DatasetPicker from '../features/request/DatasetPicker'
@@ -71,12 +72,7 @@ function RequestEditor({ source, preset, onSourceChange, onLoadPreset }: {
   const pendingPreset = useRef(preset)
   const [detailsOpen, setDetailsOpen] = useState(false)
   const [aiNotice, setAiNotice] = useState('')
-  const [successToast, setSuccessToast] = useState<{ source: 'ai' | 'preset'; message: string } | null>(null)
-  useEffect(() => {
-    if (!successToast) return
-    const timeout = window.setTimeout(() => setSuccessToast(null), successToast.source === 'ai' ? 6000 : 3500)
-    return () => window.clearTimeout(timeout)
-  }, [successToast])
+  const toast = useSuccessToast()
   const initialized = useRef('')
   const version = useRef(0)
   const schema = useQuery({ queryKey: requestSchemaKey(datasetId, prefix), queryFn: () => api.schema(datasetId, false, prefix), enabled: !!datasetId, retry: false, staleTime: requestSchemaFreshMs })
@@ -166,7 +162,7 @@ function RequestEditor({ source, preset, onSourceChange, onLoadPreset }: {
       setPayload((current) => ({ ...current, ...candidate }))
       version.current += 1
       setAiNotice('')
-      setSuccessToast({ source: 'ai', message: `已回填 ${Object.keys(candidate).length} 个参数` })
+      toast.show(`已回填 ${Object.keys(candidate).length} 个参数`, 6000)
     },
   })
   const editParameters = () => {
@@ -277,7 +273,7 @@ function RequestEditor({ source, preset, onSourceChange, onLoadPreset }: {
               editor_values: selection, split_strategy: split,
               ...(split === 'smart' && countValid ? { split_count: count } : {}),
             }} canSave={valid && !schema.isFetching} disabled={create.isPending} onLoad={onLoadPreset}
-              onSaved={() => setSuccessToast({ source: 'preset', message: '预设已保存' })}>
+              onSaved={() => toast.show('预设已保存')}>
               <button type="button" className="button" aria-haspopup="dialog" aria-expanded={detailsOpen}
                 onClick={() => setDetailsOpen(true)}>显示请求详情</button>
               <button type="submit" className="button primary" disabled={!canCreate || create.isPending}>
@@ -289,14 +285,6 @@ function RequestEditor({ source, preset, onSourceChange, onLoadPreset }: {
       </div>
       {detailsOpen && <RequestDetailsDialog datasetId={datasetId} items={currentPlan?.items ?? []} draft={compiled} fields={fields} onClose={() => setDetailsOpen(false)} />}
     </aside></form>
-    {createPortal(<div className="request-toast">
-      <div role="status" aria-atomic="true">
-        {successToast &&
-          <div className="request-toast-card">
-            <CircleCheck size={17} aria-hidden="true" />
-            <span>{successToast.message}</span>
-          </div>}
-      </div>
-    </div>, document.body)}
+    {createPortal(<SuccessToast message={toast.message} />, document.body)}
   </section>
 }

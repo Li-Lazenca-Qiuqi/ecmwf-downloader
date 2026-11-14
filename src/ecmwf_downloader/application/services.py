@@ -120,6 +120,9 @@ class TaskService:
     def list(self, **kwargs):
         return self.tasks.list(**kwargs)
 
+    def batch(self, batch_id: str):
+        return self.tasks.list_batch(batch_id)
+
     def summary(self):
         return self.tasks.summary()
 

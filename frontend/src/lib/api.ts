@@ -20,6 +20,12 @@ export type Task = {
   cancel_requested: boolean
   created_at: string
 }
+export type QueueWindow = { items: Task[]; total: number; next_cursor: string | null }
+export type RequestBatch = {
+  name: string
+  total: number
+  items: { id: string; position: number; status: TaskStatus; links: string[] }[]
+}
 export type Template = { id: string; name: string; payload: Record<string, unknown> }
 export type Account = {
   id: string
@@ -98,6 +104,9 @@ const post = <T,>(path: string, body?: unknown) => request<T>(path, { method: 'P
 export const api = {
   summary: () => request<Summary>('/api/v1/summary'),
   tasks: (params = '') => request<{ items: Task[]; total: number }>(`/api/v1/tasks${params}`),
+  queueWindow: (params: URLSearchParams, signal: AbortSignal) =>
+    request<QueueWindow>(`/api/v1/tasks?${params}`, { signal }),
+  batch: (id: string) => request<RequestBatch>(`/api/v1/request-batches/${encodeURIComponent(id)}`),
   templates: () => request<{ items: Template[] }>('/api/v1/templates'),
   saveTemplate: (name: string, payload: Record<string, unknown>) =>
     post<Template>('/api/v1/templates', { name, payload }),

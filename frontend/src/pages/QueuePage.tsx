@@ -1,14 +1,15 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useId, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { Link, useSearchParams } from 'react-router-dom'
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { ChevronLeft, ChevronRight, Plus, RefreshCw, Search, X, Copy, RotateCw, Trash2, File } from 'lucide-react'
+import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { Plus, RefreshCw, Search, X, Copy, CopyPlus, RotateCw, Trash2, File } from 'lucide-react'
 import { api, type Task, type Summary } from '../lib/api'
 import { ErrorNotice, Loading, StatusBadge, formatBytes, formatDate, statusLabels } from '../components'
 import CardSelect from '../CardSelect'
+import SuccessToast, { useSuccessToast } from '../SuccessToast'
 import RequestParameterViews from '../features/request/RequestParameterViews'
 
-const pageSize = 10
+const pageSize = 20
 const statusOptions = [{ value: '', label: '全部状态' }, ...Object.entries(statusLabels).map(([value, label]) => ({ value, label }))]
 const activeStates = ['queued', 'submitting', 'accepted', 'running', 'refreshing']
 const queueActions = {
@@ -45,17 +46,22 @@ function statusDetail(task: Task, summary?: Summary) {
   if (task.status === 'cancelling') return '正在确认远端取消结果'
   return null
 }
-function useLinkCopy() {
-  const [message, setMessage] = useState('')
+const copyFailedMessage = '无法访问剪贴板，请在详情中手动复制链接。'
+
+function useLinkCopy(onSuccess: (message: string) => void) {
+  const [failed, setFailed] = useState(false)
   const copy = async (urls: string[]) => {
     try {
       await navigator.clipboard.writeText(urls.join('\n'))
-      setMessage('已复制 ' + urls.length + ' 条链接')
+      setFailed(false)
+      onSuccess(`已复制 ${urls.length} 条链接`)
+      return true
     } catch {
-      setMessage('无法访问剪贴板，请在详情中手动复制链接。')
+      setFailed(true)
+      return false
     }
   }
-  return { message, copy }
+  return { copy, failed }
 }
 function retryLabel(task: Task) {
   if (task.status === 'failed' && task.remote_request_id && !['failed', 'rejected', 'dismissed'].includes(task.remote_status || ''))
@@ -78,17 +84,101 @@ function availableActions(task: Task): Record<QueueAction, boolean> {
 export default function QueuePage() {
   const [search, setSearch] = useState('')
   const [status, setStatus] = useState('')
-  const [offset, setOffset] = useState(0)
+  const [ctrlHeld, setCtrlHeld] = useState(false)
+  useEffect(() => {
+    function update(event: KeyboardEvent) { setCtrlHeld(event.ctrlKey) }
+    function clear() { setCtrlHeld(false) }
+    window.addEventListener('keydown', update)
+    window.addEventListener('keyup', update)
+    window.addEventListener('blur', clear)
+    return () => {
+      window.removeEventListener('keydown', update)
+      window.removeEventListener('keyup', update)
+      window.removeEventListener('blur', clear)
+    }
+  }, [])
+
+  const visit = useId()
+  const lastWheelAt = useRef(-Infinity)
+  const bottomTouch = useRef<{ x: number; y: number } | null>(null)
+  const [filterRevision, setFilterRevision] = useState(0)
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
   const [params, setParams] = useSearchParams()
   const selectedId = params.get('selected')
   const queryClient = useQueryClient()
-  const links = useLinkCopy()
+  const toast = useSuccessToast()
+  const links = useLinkCopy(toast.show)
+  const copyBatch = useMutation({
+    mutationFn: async ({ taskId, batchId }: { taskId: string; batchId: string }) => {
+      const batch = await api.batch(batchId)
+      const urls = batch.items.flatMap(item => item.links)
+      if (!urls.length || !await links.copy(urls)) {
+        setParams({ selected: taskId, batch: '1', ...(urls.length ? { manual: '1' } : {}) })
+      }
+    },
+  })
   const summary = useQuery({ queryKey: ['summary'], queryFn: api.summary, refetchInterval: 5000 })
-  const query = new URLSearchParams({ limit: String(pageSize), offset: String(offset) })
-  if (search.trim()) query.set('search', search.trim())
-  if (status) query.set('status', status)
-  const tasks = useQuery({ queryKey: ['tasks', query.toString()], queryFn: () => api.tasks('?' + query), refetchInterval: 5000 })
+  const term = search.trim()
+  const tasks = useInfiniteQuery({
+    queryKey: ['tasks', 'queue', visit, term, status, filterRevision],
+    initialPageParam: '',
+    queryFn: ({ pageParam, signal }) => {
+      const params = new URLSearchParams({ limit: String(pageSize), cursor: pageParam })
+      if (term) params.set('search', term)
+      if (status) params.set('status', status)
+      return api.queueWindow(params, signal)
+    },
+    getNextPageParam: page => page.next_cursor ?? undefined,
+    refetchInterval: 5000,
+  })
+  const { fetchNextPage, hasNextPage, isFetching, isFetchNextPageError } = tasks
+  useEffect(() => {
+    function atBottom() {
+      const page = document.scrollingElement
+      return !!page && page.scrollHeight - page.scrollTop - page.clientHeight <= 2
+    }
+
+    function loadNext() {
+      if (hasNextPage && !isFetching && !isFetchNextPageError && !selectedId) {
+        void fetchNextPage({ cancelRefetch: false })
+      }
+    }
+
+    function wheel(event: WheelEvent) {
+      if (event.ctrlKey || Math.abs(event.deltaY) <= Math.abs(event.deltaX)) return
+      const independent = event.timeStamp - lastWheelAt.current > 180
+      lastWheelAt.current = event.timeStamp
+      // 同一次滚动及惯性到达底部后，等待下一次滚动输入。
+      if (independent && event.deltaY > 0 && atBottom() && !(event.target as Element | null)?.closest?.('[role="listbox"]')) {
+        loadNext()
+      }
+    }
+
+    function touchStart(event: TouchEvent) {
+      const touch = event.touches[0]
+      bottomTouch.current = event.touches.length === 1 && atBottom()
+        ? { x: touch.clientX, y: touch.clientY } : null
+    }
+
+    function touchEnd(event: TouchEvent) {
+      const start = bottomTouch.current
+      bottomTouch.current = null
+      const touch = event.changedTouches[0]
+      if (!start || !touch) return
+      const upward = start.y - touch.clientY
+      if (upward > 24 && upward > Math.abs(start.x - touch.clientX) && atBottom()) loadNext()
+    }
+
+    // 同步读取滚动位置，避免浏览器先滚到页底再分发滚轮事件。
+    window.addEventListener('wheel', wheel, { passive: false })
+    window.addEventListener('touchstart', touchStart, { passive: true })
+    window.addEventListener('touchend', touchEnd, { passive: true })
+    return () => {
+      window.removeEventListener('wheel', wheel)
+      window.removeEventListener('touchstart', touchStart)
+      window.removeEventListener('touchend', touchEnd)
+    }
+  }, [fetchNextPage, hasNextPage, isFetching, isFetchNextPageError, selectedId])
   const action = useMutation({
     mutationFn: async ({ ids, operation }: { ids: string[]; operation: RequestAction }) => {
       const results = await Promise.allSettled(ids.map(id =>
@@ -115,26 +205,23 @@ export default function QueuePage() {
       ])
     },
   })
-  const lastOffset = tasks.data ? Math.max(0, Math.floor((tasks.data.total - 1) / pageSize) * pageSize) : offset
-  useEffect(() => {
-    if (offset > lastOffset) {
-      setOffset(lastOffset)
-      setSelectedIds(new Set())
-    }
-  }, [offset, lastOffset])
   const counts = summary.data?.by_status
-  const total = tasks.data?.total ?? 0
-  const items = tasks.data?.items ?? []
+  const total = tasks.data?.pages[0]?.total ?? 0
+  const items = tasks.data?.pages.flatMap(page => page.items) ?? []
   const selectedItems = items.filter(task => selectedIds.has(task.id))
   const allSelected = items.length > 0 && selectedItems.length === items.length
   const batchTargets = (operation: QueueAction) => {
-    const usesCurrentPage = operation === 'refresh' || operation === 'copy'
-    const candidates = usesCurrentPage && !selectedItems.length ? items : selectedItems
+    const usesLoadedRows = operation === 'refresh' || operation === 'copy'
+    const candidates = usesLoadedRows && !selectedItems.length ? items : selectedItems
     return candidates.filter(task => availableActions(task)[operation])
   }
   const verification = selectedItems.length === 1 && selectedItems[0].status === 'submission_unknown'
     ? selectedItems[0] : null
-  const changePage = (nextOffset: number) => { setOffset(nextOffset); setSelectedIds(new Set()) }
+  const resetSelection = () => {
+    setSelectedIds(new Set())
+    setFilterRevision(current => current + 1)
+    window.scrollTo(0, 0)
+  }
   const toggleSelection = (id: string) => setSelectedIds(current => {
     const next = new Set(current)
     if (next.has(id)) next.delete(id)
@@ -151,18 +238,25 @@ export default function QueuePage() {
   }
   const actions = (task: Task) => {
     const available = availableActions(task)
+    const batch = task.batch && task.batch.total > 1 ? task.batch : null
     return <div className="row-actions task-row-actions">
       {operationOrder.map(operation => {
-        if (operation !== 'refresh' && !available[operation]) return null
-        const { icon: Icon } = queueActions[operation]
-        const label = operation === 'retry' ? retryLabel(task)
+        const copyWholeBatch = operation === 'copy' && !!batch && ctrlHeld
+        if (operation !== 'refresh' && !available[operation] && !copyWholeBatch) return null
+        const Icon = copyWholeBatch ? CopyPlus : queueActions[operation].icon
+        const label = copyWholeBatch ? '复制整批链接' : operation === 'retry' ? retryLabel(task)
           : operation === 'delete' ? '删除请求记录' : queueActions[operation].label
         const refreshing = operation === 'refresh' && action.isPending
           && action.variables.operation === 'refresh' && action.variables.ids.includes(task.id)
         return <button key={operation} type="button"
-          className={operation === 'delete' || operation === 'cancel' ? 'task-icon-button danger' : 'task-icon-button'}
-          title={label} aria-label={label} disabled={!available[operation] || action.isPending}
-          onClick={() => runAction(operation, [task])}>
+          className={`task-icon-button${copyWholeBatch ? ' copy-whole-batch' : operation === 'delete' || operation === 'cancel' ? ' danger' : ''}`}
+          title={operation === 'copy' && batch && !copyWholeBatch ? '复制链接 · Ctrl + 点击复制整批' : label}
+          aria-label={label} disabled={(!available[operation] && !copyWholeBatch) || action.isPending || (copyWholeBatch && copyBatch.isPending)}
+          onClick={event => {
+            if (operation === 'copy' && batch && event.ctrlKey) {
+              if (!copyBatch.isPending) copyBatch.mutate({ taskId: task.id, batchId: batch.batch_id })
+            } else if (available[operation]) runAction(operation, [task])
+          }}>
           <Icon size={17} className={refreshing ? 'spin' : undefined} aria-hidden="true" />
         </button>
       })}
@@ -182,9 +276,9 @@ export default function QueuePage() {
     {summary.data && summary.data.available_accounts === 0 && <p className="notice">新的 CDS 请求等待可用账号，NCAR 文件链接不受影响。<Link to="/accounts">管理账号</Link></p>}
     <div className="panel">
       <div className="toolbar">
-        <label className="search-field"><Search size={16} /><input aria-label="搜索请求" placeholder="搜索数据集、请求名称或远端 ID" value={search} onChange={event => { setSearch(event.target.value); changePage(0) }} /></label>
+        <label className="search-field"><Search size={16} /><input aria-label="搜索请求" placeholder="搜索数据集、请求名称或远端 ID" value={search} onChange={event => { setSearch(event.target.value); resetSelection() }} /></label>
         <CardSelect label="请求状态" value={status} options={statusOptions}
-          onChange={value => { setStatus(value); changePage(0) }} />
+          onChange={value => { setStatus(value); resetSelection() }} />
         {selectedItems.length > 0 && <span className="selection-count">已选 {selectedItems.length} 项</span>}
         {operationOrder.map(operation => {
           const targets = batchTargets(operation)
@@ -200,13 +294,13 @@ export default function QueuePage() {
         {verification && <button type="button" className="button"
           onClick={() => setParams({ selected: verification.id })}>核实提交</button>}
       </div>
-      <ErrorNotice error={tasks.error || action.error || action.data?.error} />
+      <ErrorNotice error={tasks.error || action.error || action.data?.error || copyBatch.error} />
       {tasks.isPending ? <Loading /> : <>
         <div className="table-scroll"><table className="task-table">
           <colgroup><col className="selection-column" /><col /><col className="status-column" /><col className="remote-column" /><col className="date-column" /><col className="actions-column" /></colgroup>
           <thead><tr>
             <th scope="col" className="selection-cell">
-              <input type="checkbox" className="request-checkbox" aria-label="全选本页请求" title="全选本页请求"
+              <input type="checkbox" className="request-checkbox" aria-label="全选已加载请求" title="全选已加载请求"
                 checked={allSelected} disabled={!items.length}
                 ref={input => { if (input) input.indeterminate = selectedItems.length > 0 && !allSelected }}
                 onChange={event => setSelectedIds(new Set(event.target.checked ? items.map(task => task.id) : []))} />
@@ -223,10 +317,18 @@ export default function QueuePage() {
             <td className="remote-cell"><code>{task.remote_request_id || (directSources.has(task.dataset_id) ? '文件直链' : '—')}</code></td><td className="date-cell">{formatDate(task.created_at)}</td><td>{actions(task)}</td>
           </tr>)}</tbody></table></div>
         {!total && !tasks.isError && <p className="empty-state">{search || status ? '没有符合条件的请求。' : '暂无请求，提交后会自动监视并获取链接。'}</p>}
-        <div className="table-footer"><div className="footer-summary"><span>共 {total} 个请求</span><span role="status">{links.message}</span></div><div className="pagination"><span>每页显示 {pageSize} 条</span><span>第 {items.length ? offset + 1 : 0}–{items.length ? offset + items.length : 0} 条</span><div className="row-actions"><button type="button" className="button" aria-label="上一页" disabled={!offset || tasks.isFetching} onClick={() => changePage(Math.max(0, offset - pageSize))}><ChevronLeft size={16} /></button><button type="button" className="button" aria-label="下一页" disabled={offset + pageSize >= total || tasks.isFetching} onClick={() => changePage(offset + pageSize)}><ChevronRight size={16} /></button></div></div></div>
+        <div className="table-footer queue-footer">
+          <div className="footer-summary"><span>已加载 {items.length} / {total} 条</span>{links.failed && <span role="status">{copyFailedMessage}</span>}</div>
+          {hasNextPage && <button type="button" className="text-button queue-load-more" disabled={isFetching}
+            onClick={() => void fetchNextPage({ cancelRefetch: false })}>
+            {tasks.isFetchingNextPage ? '加载中…' : isFetchNextPageError ? '重试加载' : '加载更多'}
+          </button>}
+        </div>
       </>}
     </div>
-    {selectedId && <TaskDetails key={selectedId} id={selectedId} onClose={() => setParams({})} />}
+    {selectedId && <TaskDetails key={selectedId} id={selectedId} initialBatchOpen={params.get('batch') === '1'}
+      showManualLinks={params.get('manual') === '1'} onClose={() => setParams({})} />}
+    {createPortal(<SuccessToast message={toast.message} />, document.body)}
   </section>
 }
 function QueueStatus({ task, summary }: { task: Task; summary?: Summary }) {
@@ -237,13 +339,17 @@ function QueueStatus({ task, summary }: { task: Task; summary?: Summary }) {
   </>
 }
 
-function TaskDetails({ id, onClose }: { id: string; onClose: () => void }) {
+function TaskDetails({ id, initialBatchOpen, showManualLinks, onClose }: {
+  id: string; initialBatchOpen: boolean; showManualLinks: boolean; onClose: () => void
+}) {
   const dialog = useRef<HTMLDialogElement>(null)
   const task = useQuery({ queryKey: ['tasks', 'detail', id], queryFn: () => api.task(id), refetchInterval: 5000 })
   const request = task.data
   const [remoteId, setRemoteId] = useState('')
+  const [batchOpen, setBatchOpen] = useState(initialBatchOpen)
   const client = useQueryClient()
-  const links = useLinkCopy()
+  const toast = useSuccessToast()
+  const links = useLinkCopy(toast.show)
   const attach = useMutation({ mutationFn: () => api.attach(id, remoteId.trim()), onSuccess: () => void client.invalidateQueries({ queryKey: ['tasks'] }) })
   useEffect(() => {
     const element = dialog.current
@@ -273,6 +379,12 @@ function TaskDetails({ id, onClose }: { id: string; onClose: () => void }) {
           </div>
           <StatusBadge status={request.status} />
         </div>
+        {request.batch && request.batch.total > 1 && <section>
+          <button type="button" className="button" aria-expanded={batchOpen} onClick={() => setBatchOpen(value => !value)}>
+            {batchOpen ? '收起批次' : '查看批次'}
+          </button>
+          {batchOpen && <BatchLinks id={request.batch.batch_id} showManualLinks={showManualLinks} onCopied={toast.show} />}
+        </section>}
         <dl className="task-details-metadata">
           <div><dt>本地请求 ID</dt><dd><code>{request.id}</code></dd></div>
           <div><dt>远端请求 ID</dt><dd><code>{request.remote_request_id || '—'}</code></dd></div>
@@ -307,11 +419,40 @@ function TaskDetails({ id, onClose }: { id: string; onClose: () => void }) {
             <input aria-label={'下载链接 ' + (index + 1)} value={asset.url} readOnly onFocus={event => event.target.select()} />
           </div>)}
           <p className="helper">复制到专业下载器使用，源站缓存清理后链接可能失效。</p>
-          {links.message && <p className="helper" role="status">{links.message}</p>}
+          {links.failed && <p className="helper" role="status">{copyFailedMessage}</p>}
         </section>}
         {request.status === 'expired' && <p className="notice">远端结果已不可用。可通过“重新提交”发起新请求。</p>}
         <RequestParameterViews payload={request.request_payload} heading="请求参数" />
       </>}
     </div>
+    <SuccessToast message={toast.message} />
   </dialog>, document.body)
+}
+
+function BatchLinks({ id, showManualLinks, onCopied }: {
+  id: string; showManualLinks: boolean; onCopied: (message: string) => void
+}) {
+  const batch = useQuery({ queryKey: ['tasks', 'batch', id], queryFn: () => api.batch(id), refetchInterval: 5000 })
+  const copy = useLinkCopy(onCopied)
+  const result = batch.data
+  const urls = result?.items.flatMap(item => item.links) ?? []
+  return <div className="request-results">
+    <ErrorNotice error={batch.error} />
+    {batch.isPending && <Loading />}
+    {result && <>
+      <div className="section-heading">
+        <h3>{result.name} · 已就绪 {result.items.filter(item => item.links.length).length}/{result.total} 份</h3>
+        <button type="button" className="button" disabled={!urls.length} onClick={() => void copy.copy(urls)}>
+          <Copy size={14} aria-hidden="true" />复制整批链接
+        </button>
+      </div>
+      {!urls.length && <p className="helper">这一批暂时没有就绪链接。</p>}
+      <ul className="batch-parts">
+        {result.items.map(item => <li key={item.id}>第 {item.position} 份 <StatusBadge status={item.status} /></li>)}
+      </ul>
+      {urls.length > 0 && (showManualLinks || copy.failed) && <textarea aria-label="整批已就绪链接" value={urls.join('\n')} readOnly
+        rows={Math.min(urls.length, 5)} onFocus={event => event.target.select()} />}
+      {copy.failed && <p role="status">{copyFailedMessage}</p>}
+    </>}
+  </div>
 }

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from datetime import datetime
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import AsyncIterator, Optional
@@ -124,9 +125,45 @@ def create_app(container: Optional[AppContainer] = None, *, with_worker: bool = 
         search: Optional[str] = None,
         limit: int = Query(50, ge=1, le=500),
         offset: int = Query(0, ge=0),
+        cursor: Optional[str] = Query(None, max_length=400),
     ):
-        tasks, total = app_container.tasks.list(status=status, search=search, limit=limit, offset=offset)
-        return {"items": [_task_json(task) for task in tasks], "total": total, "limit": limit, "offset": offset}
+        if cursor is None:
+            tasks, total = app_container.tasks.list(status=status, search=search, limit=limit, offset=offset)
+            return {"items": [_task_json(task) for task in tasks], "total": total, "limit": limit, "offset": offset}
+        after = None
+        if cursor:
+            try:
+                created, batch_id, position, task_id = json.loads(cursor)
+                after = datetime.fromisoformat(created), str(batch_id), int(position), str(task_id)
+            except (ValueError, TypeError):
+                raise ValueError('队列游标无效，请重新加载') from None
+        tasks, total = app_container.tasks.list(status=status, search=search, limit=limit + 1, after=after)
+        next_cursor = None
+        if len(tasks) > limit:
+            tasks = tasks[:limit]
+            last = tasks[-1]
+            next_cursor = json.dumps([
+                last.created_at.isoformat(), last.batch.batch_id if last.batch else '',
+                last.batch.position if last.batch else 0, last.id,
+            ], separators=(',', ':'))
+        return {"items": [_task_json(task) for task in tasks], "total": total, "next_cursor": next_cursor}
+
+    @app.get("/api/v1/request-batches/{batch_id}")
+    def request_batch(batch_id: str):
+        tasks = app_container.tasks.batch(batch_id)
+        if not tasks:
+            return _problem(404, "请求批次不存在", "资源不存在")
+        return {
+            "name": tasks[0].batch.name,
+            "total": tasks[0].batch.total,
+            "items": [
+                {
+                    "id": task.id, "position": task.batch.position, "status": task.status,
+                    "links": [asset.url for asset in task.results] if task.status == TaskStatus.COMPLETED else [],
+                }
+                for task in tasks
+            ],
+        }
 
     @app.get("/api/v1/tasks/{task_id}")
     def get_task(task_id: str):
