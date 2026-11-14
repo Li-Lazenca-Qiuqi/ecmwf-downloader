@@ -77,7 +77,7 @@ function RequestEditor({ source, preset, onSourceChange, onLoadPreset }: {
   const version = useRef(0)
   const schema = useQuery({ queryKey: requestSchemaKey(datasetId, prefix), queryFn: () => api.schema(datasetId, false, prefix), enabled: !!datasetId, retry: false, staleTime: requestSchemaFreshMs })
   const fileSource = schema.data?.capabilities?.file_selection ?? (source === 'ncar' || source === 'gdex')
-  const accounts = useQuery({ queryKey: ['accounts'], queryFn: api.accounts, enabled: !fileSource })
+  const accounts = useQuery({ queryKey: ['accounts'], queryFn: api.accounts, enabled: !fileSource, refetchInterval: 5000 })
   const availableAccounts = (accounts.data?.items ?? []).filter(account => account.status === 'active')
     .sort((a, b) => a.today_used_count - b.today_used_count || a.email.localeCompare(b.email) || a.id.localeCompare(b.id))
   const fields = schema.data?.support_status === 'unavailable' ? [] : schema.data?.fields || []
@@ -129,15 +129,18 @@ function RequestEditor({ source, preset, onSourceChange, onLoadPreset }: {
   const currentPlan = valid && !preview.isError && stableBody === bodyKey ? preview.data : undefined
   const requestCount = currentPlan?.items.length ?? 1
   const multiple = requestCount > 1
-  const availableIds = availableAccounts.map(account => account.id)
+  const availableIds = availableAccounts.filter(account => !account.is_busy).map(account => account.id)
   const accountIds = (accountDraft?.multiple === multiple
     ? availableIds.filter(id => accountDraft.ids.includes(id)) : availableIds).slice(0, requestCount)
+  const busySelection = accountDraft?.multiple === multiple
+    && availableAccounts.some(account => account.is_busy && accountDraft.ids.includes(account.id))
   const defaultName = schema.data?.title.trim() || datasetId
   const create = useMutation({
     mutationFn: () => api.createTasks({
       ...body, name: requestName.trim() || defaultName,
       ...(!fileSource ? { account_ids: accountIds } : {}),
     }),
+    onError: () => void queryClient.invalidateQueries({ queryKey: ['accounts'] }),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ['tasks'] })
       void queryClient.invalidateQueries({ queryKey: ['summary'] })
@@ -202,7 +205,7 @@ function RequestEditor({ source, preset, onSourceChange, onLoadPreset }: {
   }
   const constraintsReady = stableSelection === selectionKey && !constraints.isFetching && (!!constraints.data || constraints.isError)
   const planReady = !!currentPlan && !schema.isFetching && !preview.isFetching
-  const canCreate = planReady && (fileSource || (accountIds.length > 0 && !constraintErrors.length && (multiple || constraintsReady)))
+  const canCreate = planReady && (fileSource || (accountIds.length > 0 && !busySelection && !constraintErrors.length && (multiple || constraintsReady)))
   return <section className="page request-builder-page">
     <div className="page-heading request-heading">
       <div><h1>提交请求</h1><p>选择数据集和参数，提交后自动监视处理状态。</p></div>
@@ -256,7 +259,7 @@ function RequestEditor({ source, preset, onSourceChange, onLoadPreset }: {
                 ]} />
             </div>
             {!fileSource && <RequestAccountPicker accounts={availableAccounts} selected={accountIds}
-              limit={requestCount} loading={accounts.isPending} error={accounts.error}
+              limit={requestCount} loading={accounts.isPending} error={accounts.error} busySelection={busySelection}
               onChange={ids => { setAccountDraft({ multiple, ids }); create.reset() }} />}
           </fieldset>
           {errors.length > 0 && loaded && <details className="validation-list">

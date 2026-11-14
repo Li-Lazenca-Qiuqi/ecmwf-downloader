@@ -320,6 +320,23 @@ def test_queue_cursor_and_batch_links_survive_changes(tmp_path):
         assert client.get("/api/v1/request-batches/missing").status_code == 404
 
 
+def test_busy_explicit_account_cannot_create_another_batch(tmp_path):
+    settings = AppSettings(database_path=tmp_path / "requests.sqlite3", config_dir=tmp_path / "config")
+    container = AppContainer(settings)
+    with TestClient(create_app(container, with_worker=False)) as client:
+        account = client.post("/api/v1/accounts", json={
+            "email": "fixture@example.test", "key": "fixture", "url": "https://example.test",
+        }).json()
+        body = {"dataset_id": "test", "request_payload": {"year": ["2024"]}, "account_ids": [account["id"]]}
+        client.post("/api/v1/tasks", json=body).raise_for_status()
+        claimed = container.tasks_repository.claim_next("worker", account_id=account["id"])
+        assert claimed.account_id == account["id"]
+        assert client.get("/api/v1/accounts").json()["items"][0]["is_busy"]
+        rejected = client.post("/api/v1/tasks", json=body)
+        assert rejected.status_code == 422 and "繁忙" in rejected.json()["detail"]
+        assert client.get("/api/v1/tasks").json()["total"] == 1
+
+
 def test_request_preset_does_not_replace_legacy_template(tmp_path):
     settings = AppSettings(database_path=tmp_path / "requests.sqlite3", config_dir=tmp_path / "config")
     container = AppContainer(settings)

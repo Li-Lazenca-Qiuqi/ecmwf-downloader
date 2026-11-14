@@ -40,6 +40,13 @@ def _utc_now() -> datetime:
 
 
 
+def _busy_accounts():
+    return select(TaskRow.account_id).distinct().where(
+        TaskRow.account_id.is_not(None),
+        TaskRow.status.in_([status.value for status in ACTIVE_STATUSES]),
+    )
+
+
 class TaskRepository:
     def __init__(self, database: Database, retry_delays=None):
         self.database = database
@@ -90,6 +97,8 @@ class TaskRepository:
     def create_batch(self, *, dataset_id, items, name, split_strategy, max_retries, account_ids=()):
         batch_id = str(uuid4())
         with self.database.session(immediate=True) as session:
+            if account_ids and session.scalar(_busy_accounts().where(TaskRow.account_id.in_(account_ids)).limit(1)):
+                raise ValueError('所选账号正在繁忙，请重新选择或等待恢复')
             now = _utc_now()
             rows = []
             for position, (request_payload, title) in enumerate(items, start=1):
@@ -518,12 +527,7 @@ class AccountStateRepository:
 
     def busy_account_ids(self) -> set[str]:
         with self.database.session() as session:
-            return set(session.scalars(
-                select(TaskRow.account_id).distinct().where(
-                    TaskRow.account_id.is_not(None),
-                    TaskRow.status.in_([status.value for status in ACTIVE_STATUSES]),
-                )
-            ))
+            return set(session.scalars(_busy_accounts()))
 
     def today_usage(self) -> dict[str, int]:
         today = _utc_now().astimezone().date()
