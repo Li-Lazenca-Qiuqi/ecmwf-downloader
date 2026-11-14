@@ -1,4 +1,4 @@
-# ECMWF Downloader 0.5.0 非敏感配置
+# ECMWF Downloader 1.0.0 非敏感配置
 database_path: data/ecmwf.sqlite3
 config_dir: config
 

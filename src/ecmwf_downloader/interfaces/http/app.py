@@ -13,6 +13,7 @@ from fastapi import FastAPI, Header, HTTPException, Query, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 
+from ecmwf_downloader import __version__
 from ecmwf_downloader.application.container import AppContainer
 from ecmwf_downloader.config import NetworkProxySettings, SettingsIOError, public_ai_settings, service_url
 from ecmwf_downloader.infrastructure.secrets import SecretStoreError
@@ -65,7 +66,7 @@ def create_app(container: Optional[AppContainer] = None, *, with_worker: bool = 
 
     app = FastAPI(
         title="ECMWF Downloader API",
-        version="0.5.0",
+        version=__version__,
         lifespan=lifespan,
     )
     app.state.container = app_container

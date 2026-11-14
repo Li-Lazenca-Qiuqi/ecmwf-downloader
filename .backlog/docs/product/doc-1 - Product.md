@@ -3,11 +3,11 @@ id: doc-1
 title: Product
 type: specification
 created_date: '2026-10-25T08:18:00Z'
-updated_date: '2026-11-14T02:53:00Z'
+updated_date: '2026-11-14T03:05:00Z'
 ---
 # ECMWF Downloader 产品说明
 
-当前工作区定位：以 Windows 原生为主要运行环境、同时支持 Linux/WSL 的单用户 ECMWF/CDS 请求与结果链接管理工具，CLI 为主要入口，本地回环 HTTP 服务同源提供 API 和 Web，服务器通过 SSH 端口转发访问。当前版本号仍为 0.5.0；本轮没有发布新版本。
+当前工作区定位：以 Windows 原生为主要运行环境、同时支持 Linux/WSL 的单用户 ECMWF/CDS 请求与结果链接管理工具，CLI 为主要入口，本地回环 HTTP 服务同源提供 API 和 Web，服务器通过 SSH 端口转发访问。当前正式版本为 1.0.0。
 
 ## 核心流程与边界
 

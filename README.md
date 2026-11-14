@@ -7,17 +7,17 @@ ECMWF/CDS 气象数据请求与结果链接管理工具，面向 Windows 和 Lin
 ## 能力概览
 
 - 从官方完整目录选择 CDS 数据集，通过通用字段、AI 或 CLI 编辑并校验科学参数。
-- 不拆分、按年、按月和按日拆分请求，预览中检查字段与实际日历。
+- 支持按年、月、日或目标份数拆分 CDS 请求，在预览中校验字段和日历。手动估算显示最大子请求及其上限。
 - 单独提交 CDS 请求并保存远端 ID，监视排队和处理，重启后继续查询同一作业。
 - 提交结果不明确时先核实并关联远端 ID，不盲目重复提交；取消等待源站确认。
-- 返回真实结果 URL 与可用元数据，支持单条、批量复制、CLI JSON 和手动更新链接。
+- 返回真实结果 URL 与可用元数据，支持单条、勾选多条、按 Ctrl 复制整批链接、CLI JSON 和手动刷新状态。
 - NCAR AWS/GDEX 分别列出原文件，返回 HTTPS 链接；不裁剪、不转换或传输文件体。ARCO 本地导出已移除。
 - SQLite WAL、事务及调度租约协调并发，账号与 AI 密钥只放在独立 secrets.yaml。
 - 结果可能随源站缓存清理而失效；没有本地传输进度、输出目录、覆盖、暂停或预约下载。
 
 ## 快速开始
 
-需要 Python 3.11+，开发环境使用 uv。当前实现和技术验证覆盖 Linux/WSL；Windows 原生文件锁等兼容尚待补齐，暂不能视为原生 Windows 已通过验收。
+需要 Python 3.11+，开发环境使用 uv。支持 Windows 原生和 Linux/WSL。Windows 原生已验证 CLI 与 Web 并发写入和服务启停，重启后的请求恢复使用模拟远端验证。
 
 ```bash
 uv sync --extra dev
@@ -73,7 +73,7 @@ uv run ecmwf config set-ai-key
 
 CLI 创建后可退出；提交与监视需要保持 ecmwf worker 或默认带调度器的 ecmwf web 运行。查询失败的重试继续使用原远端 ID；只有用户明确重新提交已失败、取消或失效的请求，才发起新作业。
 
-Web 管理台有请求队列、提交请求、账号和设置。字段与 AI、手动规模、只读预览和拆分保留，按钮为“提交请求”；不再选择本地输出目录。结果详情提供文件链接，交给下载器自行选择保存位置。
+Web 管理台提供请求队列、提交请求、账号和设置。提交前可以用 AI 补全字段、加载或保存参数预设、查看每份请求的参数并手动估算规模。结果详情提供文件链接，可交给下载器。
 
 默认来源 CDS，另有 NCAR AWS ERA5、NCAR GDEX ERA5；NCAR 每个已发布文件对应一个链接，无需 CDS 账号，不做区域或日期子集。CLI 可用 --source ncar 或 --source gdex；ARCO 本地子集导出已取消，也不以 Zarr 地址冒充所选子集文件。
 
@@ -96,7 +96,7 @@ FastAPI 以 `/api/v1` 提供版本化接口：
 - `/datasets`、`/datasets/{id}/schema`
 - `/requests/preview`、`/ai/suggestions`
 - /tasks 以及 cancel/retry/delete/batch actions；创建即进入请求队列
-- /tasks/{id}/links、/tasks/{id}/refresh、/tasks/{id}/attach
+- `/tasks/{id}/links`、`/tasks/{id}/refresh`、`/tasks/{id}/attach`、`/request-batches/{batch_id}`
 - `/accounts`、`/templates`、`/settings`
 - `/events` SSE（支持 `Last-Event-ID` 重连）
 
@@ -124,8 +124,8 @@ ssh `
 
 ## 配置和数据
 
-- `config/app.yaml`：非敏感 requests 并发、轮询、查询重试和 AI 开关。
-- `config/secrets.yaml`：CDS/AI 凭据，自动以 `0600` 权限创建并通过锁文件和原子替换更新。
+- `config/app.yaml` 保存非敏感的请求监视、网络代理和 AI 服务设置。
+- `config/secrets.yaml` 保存 CDS 和 AI 凭据，通过跨平台文件锁和原子替换更新，Linux 使用 `0600` 权限。
 - `config/app.yaml.example`、`config/secrets.yaml.example`：可提交的结构示例，不包含真实密钥。
 - `data/ecmwf.sqlite3`：请求、结果链接元数据、事件、租约、账号运行状态和模板。
 - 已有下载文件保持原状，新流程不会创建下载目标或临时数据文件。

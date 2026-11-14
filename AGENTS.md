@@ -2,7 +2,7 @@
 
 ## 项目背景
 
-面向 Windows 原生与 Linux/WSL（Windows 原生优先） 的单用户 ECMWF/CDS 请求与结果链接管理工具，以 CLI 为主要入口，FastAPI 后台同源提供 React/Vite 管理台和 API。Linux 服务器经 SSH 端口转发访问，服务只需回环监听。版本仍为 0.5.0，Python 3.11+；本轮未更新版本。Windows 原生和 Linux/WSL 已做定向验证，Windows 重启恢复使用模拟远端。
+面向 Windows 原生与 Linux/WSL（Windows 原生优先） 的单用户 ECMWF/CDS 请求与结果链接管理工具，以 CLI 为主要入口，FastAPI 后台同源提供 React/Vite 管理台和 API。Linux 服务器经 SSH 端口转发访问，服务只需回环监听。当前版本为 1.0.0，使用 Python 3.11+。Windows 原生和 Linux/WSL 已做定向验证，Windows 重启恢复使用模拟远端。
 
 用户已批准 DRAFT-7，实施见 TASK-32：软件只提交请求、监视远端状态并返回结果链接，科学数据传输交给专业下载器。不得重新引入本地下载、ARCO NetCDF 导出、输出目录浏览、覆盖或传输进度，除非用户明确改变需求。
 
@@ -74,6 +74,6 @@ Backlog 在 WSL 仓库根目录仅用 CLI，先检查 .backlog/config.yml；保�
 
 启动 Dashboard 先查 Windows/WSL 两侧端口，复用同项目服务，否则选空闲端口，以 backlog browser --port <port> --non-interactive --no-open 启动，核实项目/地址后 open_in_codex，保留其他服务。
 
-无 LAST_RUN/TODO/Roadmap 或迁移快照，不新建重复历史汇总；清理本轮临时脚本及可再生成缓存，保留运行资产、有效要求、验收证据和用户数据。版本、提交、Tag、发布分别要明确授权，CHANGELOG 只在更新版本时修改。本轮未授权提交/版本/发布。
+无 LAST_RUN/TODO/Roadmap 或迁移快照，不新建重复历史汇总；清理本轮临时脚本及可再生成缓存，保留运行资产、有效要求、验收证据和用户数据。版本、提交、Tag、发布分别要明确授权，CHANGELOG 只在更新版本时修改。
 
-最后更新：2026-11-02。
+最后更新：2026-11-14。
