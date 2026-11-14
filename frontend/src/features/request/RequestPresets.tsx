@@ -1,5 +1,4 @@
-import { useEffect, useId, useState, type ReactNode } from 'react'
-import { CircleCheck } from 'lucide-react'
+import { useId, useState, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api, type Field, type Schema, type Template } from '../../lib/api'
@@ -56,11 +55,12 @@ export function restorePresetValues(fields: Field[], saved: Payload) {
   return { values, changes: [...changes] }
 }
 
-export default function RequestPresets({ preset, canSave, disabled, onLoad, children }: {
+export default function RequestPresets({ preset, canSave, disabled, onLoad, onSaved, children }: {
   preset: Preset
   canSave: boolean
   disabled: boolean
   onLoad: (preset: Preset) => void
+  onSaved: () => void
   children: ReactNode
 }) {
   const saveFormId = useId()
@@ -68,7 +68,6 @@ export default function RequestPresets({ preset, canSave, disabled, onLoad, chil
   const [name, setName] = useState('')
   const [saving, setSaving] = useState(false)
   const [loading, setLoading] = useState(false)
-  const [savedAt, setSavedAt] = useState<number | null>(null)
   const templates = useQuery({ queryKey: presetsKey, queryFn: api.templates })
   const presets = (templates.data?.items ?? []).flatMap(item =>
     isPreset(item.payload) ? [{ id: item.id, name: item.name, preset: item.payload }] : [],
@@ -78,15 +77,10 @@ export default function RequestPresets({ preset, canSave, disabled, onLoad, chil
     onSuccess: () => {
       setSaving(false)
       setName('')
-      setSavedAt(performance.now())
+      onSaved()
       void client.invalidateQueries({ queryKey: presetsKey })
     },
   })
-  useEffect(() => {
-    if (savedAt === null) return
-    const timeout = window.setTimeout(() => setSavedAt(null), 3500)
-    return () => window.clearTimeout(timeout)
-  }, [savedAt])
   const load = useMutation({
     mutationFn: async (saved: Preset) => {
       const key = requestSchemaKey(saved.dataset_id, saved.prefix)
@@ -143,11 +137,5 @@ export default function RequestPresets({ preset, canSave, disabled, onLoad, chil
       onApply={preset => { remove.reset(); load.mutate(preset) }}
       onDelete={id => { load.reset(); remove.mutate(id) }} />}
     <ErrorNotice error={save.error} />
-    {createPortal(<div className="preset-toast" role="status" aria-atomic="true">
-      {savedAt !== null && <div className="preset-toast-card">
-        <CircleCheck size={17} aria-hidden="true" />
-        <span>预设已保存</span>
-      </div>}
-    </div>, document.body)}
   </div>
 }

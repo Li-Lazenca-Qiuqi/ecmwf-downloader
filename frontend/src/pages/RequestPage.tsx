@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { useNavigate } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Loader2, ListFilter } from 'lucide-react'
+import { CircleCheck, Loader2, ListFilter } from 'lucide-react'
 import { api, type RequestBody } from '../lib/api'
 import { ErrorNotice, Loading } from '../components'
 import CardSelect from '../CardSelect'
@@ -14,6 +15,31 @@ import RequestDetailsDialog from '../features/request/RequestDetailsDialog'
 import RequestAccountPicker from '../features/request/RequestAccountPicker'
 import { requestSchemaFreshMs, requestSchemaKey, sourceOptions, splitOptions } from '../features/request/requestOptions'
 import RequestPresets, { restorePresetValues, type Preset, type RequestSource } from '../features/request/RequestPresets'
+
+function validSplitCount(value: string) {
+  const count = Number(value)
+  return /^\d+$/.test(value) && Number.isSafeInteger(count) && count >= 2
+}
+
+function SplitCountInput({ value, onConfirm }: { value: string; onConfirm: (value: string) => void }) {
+  const input = useRef<HTMLInputElement>(null)
+  const [draft, setDraft] = useState(value)
+  const valid = validSplitCount(draft)
+  useEffect(() => { input.current?.focus(); input.current?.select() }, [])
+
+  return <div className="split-count-entry" onKeyDown={event => {
+    if (event.key !== 'Enter' || event.target !== input.current || event.nativeEvent.isComposing) return
+    event.preventDefault()
+    if (valid) onConfirm(draft)
+  }}>
+    <label>目标份数
+      <input ref={input} type="text" inputMode="numeric" value={draft} aria-invalid={!valid}
+        onChange={event => setDraft(event.target.value)} />
+    </label>
+    <button type="button" className="button primary" disabled={!valid} onClick={() => onConfirm(draft)}>确定</button>
+    {!valid && <p className="inline-error" role="alert">请输入大于等于 2 的整数份数。</p>}
+  </div>
+}
 
 const initialPrefix = 'e5.oper.an.sfc/202401/'
 const initialDatasets = { ncar: 'mirror-ncar-era5', gdex: 'mirror-ncar-gdex-era5', cds: 'reanalysis-era5-single-levels' }
@@ -45,7 +71,12 @@ function RequestEditor({ source, preset, onSourceChange, onLoadPreset }: {
   const pendingPreset = useRef(preset)
   const [detailsOpen, setDetailsOpen] = useState(false)
   const [aiNotice, setAiNotice] = useState('')
-  const [aiUndo, setAiUndo] = useState<{ payload: Payload; version: number } | null>(null)
+  const [successToast, setSuccessToast] = useState<{ source: 'ai' | 'preset'; message: string } | null>(null)
+  useEffect(() => {
+    if (!successToast) return
+    const timeout = window.setTimeout(() => setSuccessToast(null), successToast.source === 'ai' ? 6000 : 3500)
+    return () => window.clearTimeout(timeout)
+  }, [successToast])
   const initialized = useRef('')
   const version = useRef(0)
   const schema = useQuery({ queryKey: requestSchemaKey(datasetId, prefix), queryFn: () => api.schema(datasetId, false, prefix), enabled: !!datasetId, retry: false, staleTime: requestSchemaFreshMs })
@@ -68,14 +99,14 @@ function RequestEditor({ source, preset, onSourceChange, onLoadPreset }: {
         setPayload(values)
         setPresetNotice(changes.length ? `请重新选择：${changes.join('、')}` : '')
       } else if (!sameDataset) setPayload(defaultsFor(schema.data.fields))
-      else { setAiNotice('字段定义已更新，已保留当前输入，请检查有效性或重置默认值。'); setAiUndo(null) }
+      else setAiNotice('字段定义已更新，已保留当前输入，请检查有效性或重置默认值。')
       setSplit((current) => schema.data?.capabilities?.split_strategies.includes(current) ? current : 'none')
     }
   }, [schema.data, datasetId])
   const errors = fieldErrors(fields, payload)
   const loaded = !!fields.length && schema.data?.source !== 'error'
   const count = Number(splitCount)
-  const countValid = split !== 'smart' || (/^\d+$/.test(splitCount) && Number.isSafeInteger(count) && count >= 2)
+  const countValid = split !== 'smart' || validSplitCount(splitCount)
   const valid = loaded && countValid && !errors.length && datasetInput.trim() === datasetId && (!fileSource || prefixInput.trim() === prefix)
   const selection = activeValues(fields, payload)
   const compiled = requestPayload(fields, payload)
@@ -134,13 +165,13 @@ function RequestEditor({ source, preset, onSourceChange, onLoadPreset }: {
       create.reset()
       setPayload((current) => ({ ...current, ...candidate }))
       version.current += 1
-      setAiUndo({ payload: snapshot.payload, version: version.current })
-      setAiNotice(`已回填 ${Object.keys(candidate).length} 个参数，请检查字段和下方请求预览。`)
+      setAiNotice('')
+      setSuccessToast({ source: 'ai', message: `已回填 ${Object.keys(candidate).length} 个参数` })
     },
   })
   const editParameters = () => {
     version.current += 1
-    setAiUndo(null); setAiNotice('')
+    setAiNotice('')
     if (!suggestion.isPending) suggestion.reset()
   }
   const changeField = (name: string, value: unknown) => {
@@ -162,7 +193,6 @@ function RequestEditor({ source, preset, onSourceChange, onLoadPreset }: {
     if (!next) return
     setDatasetInput(next)
     version.current += 1
-    setAiUndo(null)
     suggestion.reset(); create.reset(); setAiNotice('')
     if (next !== datasetId) { initialized.current = ''; setPayload({}); setSplit('none'); setDatasetId(next) }
     else void queryClient.fetchQuery({ queryKey: requestSchemaKey(next, prefix), queryFn: () => api.schema(next, true, prefix), staleTime: 0 })
@@ -206,28 +236,29 @@ function RequestEditor({ source, preset, onSourceChange, onLoadPreset }: {
     <aside className="request-assistance" aria-label="参数补全与提交">
       <div className="request-assistance-scroll">
         <fieldset className="request-assistance-controls" disabled={create.isPending}>
-          <AIParameterPanel ready={loaded && datasetInput.trim() === datasetId && !schema.isFetching && (!fileSource || prefixInput.trim() === prefix)} pending={suggestion.isPending} error={suggestion.error} notice={aiNotice} canUndo={!!aiUndo && aiUndo.version === version.current}
-            onEdit={editParameters} onGenerate={(prompt) => { setAiNotice(''); setAiUndo(null); suggestion.mutate({ version: version.current, datasetId, prompt, payload: selection }) }}
-            onUndo={() => { if (aiUndo?.version === version.current) { setPayload(aiUndo.payload); version.current += 1; setAiUndo(null); setAiNotice('已恢复补全前的参数。'); create.reset() } }} />
+          <AIParameterPanel ready={loaded && datasetInput.trim() === datasetId && !schema.isFetching && (!fileSource || prefixInput.trim() === prefix)} pending={suggestion.isPending} error={suggestion.error} notice={aiNotice}
+            onEdit={editParameters} onGenerate={(prompt) => { setAiNotice(''); suggestion.mutate({ version: version.current, datasetId, prompt, payload: selection }) }} />
         </fieldset>
         <section className="panel request-output" aria-label="请求拆分与提交">
           <h2>请求拆分与提交</h2>
           <fieldset disabled={create.isPending}>
-            <label className="request-name">请求名称
-              <input value={requestName} placeholder={defaultName}
-                onChange={event => { setRequestName(event.target.value); create.reset() }} />
-            </label>
-            <section className="output-section" aria-label="请求拆分">
+            <div className="request-name-and-split">
+              <label>请求名称
+                <input value={requestName} placeholder={defaultName}
+                  onChange={event => { setRequestName(event.target.value); create.reset() }} />
+              </label>
               <CardSelect label="拆分方式" showLabel value={split} onChange={value => { setSplit(value); create.reset() }}
-                options={splitOptions.map(option => option.value === 'none' || canSplit(option.value) ? option : {
-                  ...option, label: `${option.label}（当前数据集不支持）`, disabled: true,
-                })} />
-              {split === 'smart' && <label className="split-count">目标份数
-                <input type="number" min={2} step={1} value={splitCount} aria-invalid={!countValid}
-                  onChange={event => { setSplitCount(event.target.value); create.reset() }} />
-              </label>}
-              {!countValid && <p className="inline-error" role="alert">请输入大于等于 2 的整数份数。</p>}
-            </section>
+                selectedLabel={split === 'smart' ? `自动拆分 · ${count} 份` : undefined}
+                options={[
+                  ...splitOptions.filter(option => option.value !== 'smart').map(option => ({
+                    ...option, disabled: option.value !== 'none' && !canSplit(option.value),
+                  })),
+                  { value: 'smart', label: '自动拆分', disabled: !canSplit('smart'), renderPanel: confirm =>
+                    <SplitCountInput value={splitCount} onConfirm={value => {
+                      setSplit('smart'); setSplitCount(value); create.reset(); confirm()
+                    }} /> },
+                ]} />
+            </div>
             {!fileSource && <RequestAccountPicker accounts={availableAccounts} selected={accountIds}
               limit={requestCount} loading={accounts.isPending} error={accounts.error}
               onChange={ids => { setAccountDraft({ multiple, ids }); create.reset() }} />}
@@ -245,7 +276,8 @@ function RequestEditor({ source, preset, onSourceChange, onLoadPreset }: {
               kind: 'ecmwf-request-preset-v1', source, dataset_id: datasetId, prefix,
               editor_values: selection, split_strategy: split,
               ...(split === 'smart' && countValid ? { split_count: count } : {}),
-            }} canSave={valid && !schema.isFetching} disabled={create.isPending} onLoad={onLoadPreset}>
+            }} canSave={valid && !schema.isFetching} disabled={create.isPending} onLoad={onLoadPreset}
+              onSaved={() => setSuccessToast({ source: 'preset', message: '预设已保存' })}>
               <button type="button" className="button" aria-haspopup="dialog" aria-expanded={detailsOpen}
                 onClick={() => setDetailsOpen(true)}>显示请求详情</button>
               <button type="submit" className="button primary" disabled={!canCreate || create.isPending}>
@@ -257,5 +289,14 @@ function RequestEditor({ source, preset, onSourceChange, onLoadPreset }: {
       </div>
       {detailsOpen && <RequestDetailsDialog datasetId={datasetId} items={currentPlan?.items ?? []} draft={compiled} fields={fields} onClose={() => setDetailsOpen(false)} />}
     </aside></form>
+    {createPortal(<div className="request-toast">
+      <div role="status" aria-atomic="true">
+        {successToast &&
+          <div className="request-toast-card">
+            <CircleCheck size={17} aria-hidden="true" />
+            <span>{successToast.message}</span>
+          </div>}
+      </div>
+    </div>, document.body)}
   </section>
 }
