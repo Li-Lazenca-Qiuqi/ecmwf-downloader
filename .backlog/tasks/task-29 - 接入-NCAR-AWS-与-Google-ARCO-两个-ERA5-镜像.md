@@ -1,14 +1,14 @@
 ---
 id: TASK-29
 title: 接入 NCAR AWS/GDEX 原文件链接并移除 ARCO 本地导出
-status: 待验收
+status: Done
 assignee: []
 created_date: '2026-10-26T10:11:00Z'
-updated_date: '2026-11-08T09:16:00Z'
+updated_date: '2026-11-08T12:49:00Z'
 labels: []
 dependencies: []
 type: feature
-ordinal: 25000
+ordinal: 23000
 ---
 
 ## Description

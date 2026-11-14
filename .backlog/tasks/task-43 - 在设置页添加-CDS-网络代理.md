@@ -1,15 +1,16 @@
 ---
 id: TASK-43
 title: 添加全局网络代理并统一设置保存
-status: 待验收
+status: Done
 assignee:
   - '@codex'
 created_date: '2026-11-11T05:42:00Z'
-updated_date: '2026-11-11T06:20:00Z'
+updated_date: '2026-11-11T10:37:00Z'
 labels: []
 dependencies: []
 documentation:
   - doc-1
+ordinal: 40000
 ---
 
 ## Description

@@ -1,11 +1,11 @@
 ---
 id: TASK-36
 title: 显示 CDS 账号繁忙状态
-status: 待验收
+status: Done
 assignee:
   - '@Codex'
 created_date: '2026-11-08T13:54:00Z'
-updated_date: '2026-11-08T13:56:00Z'
+updated_date: '2026-11-11T06:33:00Z'
 labels: []
 dependencies: []
 references:

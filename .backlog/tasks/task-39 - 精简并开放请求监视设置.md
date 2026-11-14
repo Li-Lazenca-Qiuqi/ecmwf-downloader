@@ -1,11 +1,11 @@
 ---
 id: TASK-39
 title: 精简并开放请求监视设置
-status: 待验收
+status: Done
 assignee:
   - '@Codex'
 created_date: '2026-11-09T12:02:00Z'
-updated_date: '2026-11-09T12:04:00Z'
+updated_date: '2026-11-11T06:54:00Z'
 labels: []
 dependencies: []
 references:

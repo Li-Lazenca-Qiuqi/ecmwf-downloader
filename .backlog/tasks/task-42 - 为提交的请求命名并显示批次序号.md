@@ -1,13 +1,14 @@
 ---
 id: TASK-42
 title: 为提交的请求命名并显示批次序号
-status: 待验收
+status: Done
 assignee:
   - '@codex'
 created_date: '2026-11-09T15:36:00Z'
-updated_date: '2026-11-09T15:52:00Z'
+updated_date: '2026-11-11T10:37:00Z'
 labels: []
 dependencies: []
+ordinal: 39000
 ---
 
 ## Description

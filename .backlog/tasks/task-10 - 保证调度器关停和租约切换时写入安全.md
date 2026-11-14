@@ -1,10 +1,10 @@
 ---
 id: TASK-10
 title: 保证调度器关停和租约切换时写入安全
-status: 待验收
+status: Done
 assignee: []
 created_date: '2026-10-23T15:01:00Z'
-updated_date: '2026-10-27T16:32:00Z'
+updated_date: '2026-11-08T12:49:00Z'
 labels:
   - migration
 milestone: m-1
@@ -16,7 +16,7 @@ documentation:
   - .backlog/docs/product/doc-1 - Product.md
 priority: high
 type: bug
-ordinal: 10000
+ordinal: 22000
 ---
 
 ## Description

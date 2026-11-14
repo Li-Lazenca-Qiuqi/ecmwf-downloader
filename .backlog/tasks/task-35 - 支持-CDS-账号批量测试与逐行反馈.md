@@ -1,11 +1,11 @@
 ---
 id: TASK-35
 title: 支持 CDS 账号批量测试与逐行反馈
-status: 待验收
+status: Done
 assignee:
   - '@Codex'
 created_date: '2026-11-08T13:46:00Z'
-updated_date: '2026-11-08T13:49:00Z'
+updated_date: '2026-11-11T06:33:00Z'
 labels: []
 dependencies: []
 references:

@@ -1,18 +1,18 @@
 ---
 id: TASK-32
 title: 按 DRAFT-7 移除本地下载并实现请求监视与结果链接
-status: 待验收
+status: Done
 assignee:
   - '@codex'
 created_date: '2026-10-27T15:31:00Z'
-updated_date: '2026-11-08T11:41:00Z'
+updated_date: '2026-11-08T12:49:00Z'
 labels: []
 dependencies: []
 documentation:
   - .backlog/drafts/draft-7 - PRD-仅提交请求、监视远端状态与返回下载链接.md
 priority: high
 type: feature
-ordinal: 28000
+ordinal: 26000
 ---
 
 ## Description

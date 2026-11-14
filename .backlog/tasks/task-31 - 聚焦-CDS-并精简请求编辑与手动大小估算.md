@@ -1,15 +1,15 @@
 ---
 id: TASK-31
 title: 聚焦 CDS 并精简请求编辑与手动大小估算
-status: 待验收
+status: Done
 assignee: []
 created_date: '2026-10-26T15:37:00Z'
-updated_date: '2026-11-08T11:51:00Z'
+updated_date: '2026-11-08T12:49:00Z'
 labels: []
 dependencies: []
 documentation:
   - .backlog/drafts/draft-6 - PRD-数据集字段统一显示规则.md
-ordinal: 27000
+ordinal: 25000
 ---
 
 ## Description

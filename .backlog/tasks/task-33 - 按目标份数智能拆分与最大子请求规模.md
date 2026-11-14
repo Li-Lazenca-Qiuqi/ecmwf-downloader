@@ -1,16 +1,17 @@
 ---
 id: TASK-33
 title: 按目标份数智能拆分与最大子请求规模
-status: 待验收
+status: Done
 assignee:
   - '@codex'
 created_date: '2026-11-08T11:50:00Z'
-updated_date: '2026-11-08T12:35:00Z'
+updated_date: '2026-11-08T12:49:00Z'
 labels: []
 dependencies: []
 documentation:
   - doc-1
 type: feature
+ordinal: 27000
 ---
 
 ## Description

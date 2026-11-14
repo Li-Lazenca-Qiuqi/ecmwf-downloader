@@ -1,14 +1,14 @@
 ---
 id: TASK-28
 title: 接入官方完整数据集目录与名称搜索
-status: 待验收
+status: Done
 assignee: []
 created_date: '2026-10-26T06:41:00Z'
-updated_date: '2026-10-26T06:59:00Z'
+updated_date: '2026-11-08T12:49:00Z'
 labels: []
 dependencies: []
 type: feature
-ordinal: 24000
+ordinal: 20000
 ---
 
 ## Description

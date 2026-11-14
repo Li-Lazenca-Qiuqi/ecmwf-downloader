@@ -1,11 +1,11 @@
 ---
 id: TASK-34
 title: 在 CDS 账号表显示今日使用次数
-status: 待验收
+status: Done
 assignee:
   - '@Codex'
 created_date: '2026-11-08T13:07:00Z'
-updated_date: '2026-11-08T13:11:00Z'
+updated_date: '2026-11-11T06:31:00Z'
 labels: []
 dependencies: []
 references:

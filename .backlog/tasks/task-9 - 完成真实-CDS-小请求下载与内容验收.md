@@ -1,10 +1,10 @@
 ---
 id: TASK-9
 title: 完成真实 CDS 小请求提交监视与链接验收
-status: 待验收
+status: Done
 assignee: []
 created_date: '2026-10-23T15:00:00Z'
-updated_date: '2026-10-27T16:32:00Z'
+updated_date: '2026-11-08T12:49:00Z'
 labels:
   - migration
   - live-cds
@@ -17,7 +17,7 @@ documentation:
   - .backlog/docs/product/doc-1 - Product.md
 priority: high
 type: task
-ordinal: 9000
+ordinal: 18000
 ---
 
 ## Description

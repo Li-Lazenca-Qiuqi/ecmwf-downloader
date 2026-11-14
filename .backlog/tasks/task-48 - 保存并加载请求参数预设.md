@@ -1,18 +1,18 @@
 ---
 id: TASK-48
 title: 保存并加载请求参数预设
-status: 待验收
+status: Done
 assignee:
   - '@codex'
 created_date: '2026-11-11T11:53:00Z'
-updated_date: '2026-11-13T14:49:00Z'
+updated_date: '2026-11-14T02:42:00Z'
 labels: []
 dependencies: []
 documentation:
   - doc-1
 priority: medium
 type: feature
-ordinal: 44000
+ordinal: 43000
 ---
 
 ## Description

@@ -1,11 +1,11 @@
 ---
 id: TASK-41
 title: 重做队列请求详情与参数视图
-status: 待验收
+status: Done
 assignee:
   - '@Codex'
 created_date: '2026-11-09T14:26:00Z'
-updated_date: '2026-11-09T14:30:00Z'
+updated_date: '2026-11-11T07:04:00Z'
 labels: []
 dependencies: []
 references:

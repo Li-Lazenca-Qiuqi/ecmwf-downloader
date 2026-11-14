@@ -1,10 +1,10 @@
 ---
 id: TASK-20
 title: 按真实结果元数据交付文件名与类型
-status: 待验收
+status: Done
 assignee: []
 created_date: '2026-10-23T15:01:00Z'
-updated_date: '2026-10-27T16:32:00Z'
+updated_date: '2026-11-08T12:49:00Z'
 labels:
   - migration
 milestone: m-2
@@ -15,7 +15,7 @@ documentation:
   - .backlog/docs/product/doc-1 - Product.md
 priority: medium
 type: bug
-ordinal: 20000
+ordinal: 21000
 ---
 
 ## Description

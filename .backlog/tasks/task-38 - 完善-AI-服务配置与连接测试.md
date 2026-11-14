@@ -1,11 +1,11 @@
 ---
 id: TASK-38
 title: 完善 AI 服务配置与连接测试
-status: 待验收
+status: Done
 assignee:
   - '@Codex'
 created_date: '2026-11-09T11:13:00Z'
-updated_date: '2026-11-09T12:00:00Z'
+updated_date: '2026-11-11T06:54:00Z'
 labels: []
 dependencies: []
 references:

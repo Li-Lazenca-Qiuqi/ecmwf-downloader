@@ -1,15 +1,15 @@
 ---
 id: TASK-30
 title: 实现 DRAFT-6 通用字段模型与请求编译闭环
-status: 待验收
+status: Done
 assignee: []
 created_date: '2026-10-26T13:05:00Z'
-updated_date: '2026-10-26T13:52:00Z'
+updated_date: '2026-11-08T12:49:00Z'
 labels: []
 dependencies: []
 documentation:
   - .backlog/drafts/draft-6 - PRD-数据集字段统一显示规则.md
-ordinal: 26000
+ordinal: 24000
 ---
 
 ## Description

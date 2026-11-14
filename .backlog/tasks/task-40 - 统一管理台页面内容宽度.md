@@ -1,11 +1,11 @@
 ---
 id: TASK-40
 title: 统一管理台页面内容宽度
-status: 待验收
+status: Done
 assignee:
   - '@Codex'
 created_date: '2026-11-09T12:07:00Z'
-updated_date: '2026-11-09T12:09:00Z'
+updated_date: '2026-11-11T06:55:00Z'
 labels: []
 dependencies: []
 references:
