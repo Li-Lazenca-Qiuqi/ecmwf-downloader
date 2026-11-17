@@ -15,7 +15,9 @@ from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 
 from ecmwf_downloader import __version__
 from ecmwf_downloader.application.container import AppContainer
-from ecmwf_downloader.config import NetworkProxySettings, SettingsIOError, public_ai_settings, service_url
+from ecmwf_downloader.config import (
+    AI_REASONING_EFFORTS, NetworkProxySettings, SettingsIOError, public_ai_settings, service_url,
+)
 from ecmwf_downloader.infrastructure.secrets import SecretStoreError
 from ecmwf_downloader.infrastructure.mirrors import DEFAULT_PREFIX, MIRROR_IDS
 from ecmwf_downloader.infrastructure.cds import ProviderError
@@ -302,7 +304,10 @@ def create_app(container: Optional[AppContainer] = None, *, with_worker: bool = 
     @app.patch('/api/v1/ai/config')
     def update_ai_configuration(body: AIConfigBody):
         key = body.api_key.get_secret_value().strip() if body.api_key is not None else None
-        app_container.update_settings({'ai': body.model_dump(exclude={'api_key'})}, ai_key=key)
+        values = body.model_dump(exclude={'api_key'})
+        if 'reasoning_effort' not in body.model_fields_set:
+            values.pop('reasoning_effort')
+        app_container.update_settings({'ai': values}, ai_key=key)
         return app_container.ai.configuration()
 
     @app.post("/api/v1/ai/test")
@@ -311,7 +316,7 @@ def create_app(container: Optional[AppContainer] = None, *, with_worker: bool = 
         try:
             app_container.ai.test_connection(
                 base_url=body.base_url, model=body.model, json_mode=body.json_mode, api_key=key,
-                network=body.network_proxy,
+                reasoning_effort=body.reasoning_effort, network=body.network_proxy,
             )
         except RuntimeError as exc:
             return _problem(503, str(exc), "AI 服务不可用")
@@ -346,7 +351,8 @@ def create_app(container: Optional[AppContainer] = None, *, with_worker: bool = 
     @app.get("/api/v1/settings")
     def get_settings():
         settings = app_container.settings.model_dump(mode="json")
-        return {**settings, "ai": public_ai_settings(settings["ai"]), "ai_config": app_container.ai.configuration()}
+        return {**settings, "ai": public_ai_settings(settings["ai"]), "ai_config": app_container.ai.configuration(),
+                "ai_reasoning_efforts": AI_REASONING_EFFORTS}
 
     @app.get("/api/v1/settings/ai-key", include_in_schema=False)
     def settings_ai_key(request: Request):

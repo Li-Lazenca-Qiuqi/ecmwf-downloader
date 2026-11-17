@@ -17,7 +17,14 @@ import ssl
 from typing import Any
 
 from ecmwf_downloader.application.request_compiler import validate_value
-from ecmwf_downloader.config import AppSettings, NetworkProxySettings, public_service_url
+from ecmwf_downloader.config import (
+    AI_REASONING_EFFORTS,
+    AppSettings,
+    NetworkProxySettings,
+    ReasoningEffort,
+    public_service_url,
+    reasoning_effort_for_model,
+)
 from ecmwf_downloader.infrastructure.network import explicit_proxy
 from ecmwf_downloader.infrastructure.secrets import SecretStore
 
@@ -49,6 +56,7 @@ class AIService:
         sdk_available = importlib.util.find_spec('openai') is not None
         return {**{name: config[name] for name in ['enabled', 'model', 'json_mode']},
                 'base_url': public_service_url(str(config['base_url'])),
+                'reasoning_effort': reasoning_effort_for_model(config['model'], config.get('reasoning_effort')),
                 'has_api_key': bool(config.get('api_key')), 'sdk_available': sdk_available,
                 'ready': bool(config.get('enabled') and config.get('api_key') and sdk_available)}
 
@@ -97,23 +105,26 @@ class AIService:
 
     def test_connection(
         self, *, base_url: str, model: str, json_mode: bool, api_key: str,
-        network: NetworkProxySettings | None = None,
+        reasoning_effort: ReasoningEffort | None = None, network: NetworkProxySettings | None = None,
     ) -> None:
         """使用表单草稿发送一个最小请求，验证后不写入设置。"""
         config = self._config()
         if not api_key:
             raise ValueError('请填写 API Key 再测试。')
-        config.update(base_url=base_url, model=model, json_mode=json_mode, api_key=api_key)
+        if reasoning_effort is not None and reasoning_effort_for_model(model, reasoning_effort) != reasoning_effort:
+            raise ValueError('当前模型不支持该推理强度，请选择服务默认或其他档位。')
+        config.update(base_url=base_url, model=model, json_mode=json_mode, api_key=api_key,
+                      reasoning_effort=reasoning_effort)
         content = self._complete(
             config, [{'role': 'user', 'content': '请只返回 JSON 对象 {"ok": true}。'}],
-            token_limit=128, timeout=15, network=network,
+            connection_test=True, network=network,
         )
         if json_mode:
             self._json_object(content)
 
     def _complete(
         self, config: dict[str, Any], messages: list[dict[str, str]], *,
-        token_limit: int | None = None, timeout: float | None = None,
+        connection_test: bool = False,
         network: NetworkProxySettings | None = None,
     ) -> str:
         try:
@@ -127,13 +138,16 @@ class AIService:
             raise RuntimeError('AI 服务地址无效，请在设置中填写无凭据的 HTTP 或 HTTPS URL')
         model = str(config.get("model") or "gpt-4o-mini")
         model_id = model.rsplit('/', 1)[-1]
-        options: dict[str, Any] = {
-            'max_completion_tokens': token_limit if token_limit is not None else int(config.get('max_tokens', 4096)),
-        }
-        if model_id == 'gpt-6-luna':
-            options['reasoning_effort'] = 'none'
-        elif not model_id.startswith('gpt-6'):
-            options['temperature'] = float(config.get('temperature', 0.3))
+        preferred_effort = config.get('reasoning_effort')
+        effort = reasoning_effort_for_model(model, preferred_effort)
+        may_reason = effort != 'none' and model_id in AI_REASONING_EFFORTS
+        # 测试提示很短。启用推理时给它与补全请求一样的生成空间和超时。
+        quick_test = connection_test and not may_reason
+        options: dict[str, Any] = {'max_completion_tokens': 128 if quick_test else int(config['max_tokens'])}
+        if effort != 'default':
+            options['reasoning_effort'] = effort
+        if not model_id.startswith('gpt-6') and (preferred_effort is None or not may_reason):
+            options['temperature'] = float(config['temperature'])
         # SDK 的调试日志包含原始响应及异常，保留应用自己的安全错误提示。
         logging.getLogger('openai').setLevel(logging.WARNING)
         try:
@@ -152,7 +166,7 @@ class AIService:
                 client = stack.enter_context(OpenAI(
                     api_key=str(config["api_key"]),
                     base_url=base_url,
-                    timeout=timeout if timeout is not None else float(config.get("timeout", 120)),
+                    timeout=15 if quick_test else float(config['timeout']),
                     max_retries=0, **transport,
                 ))
                 response = client.chat.completions.create(
@@ -161,16 +175,12 @@ class AIService:
                     **options,
                     **({'response_format': {'type': 'json_object'}} if config.get('json_mode') else {}),
                 )
-                choice = response.choices[0] if response.choices else None
-                if choice and choice.finish_reason == 'length':
-                    raise RuntimeError('AI 响应不完整，请缩小请求范围后重试')
-                content = choice.message.content if choice else ''
         except Exception as exc:
-            if isinstance(exc, RuntimeError) and str(exc).startswith('AI 响应不完整'):
-                raise RuntimeError('AI 响应不完整，请缩小请求范围后重试') from None
             if type(exc).__name__ == 'BadRequestError':
                 parameter = getattr(exc, 'param', None)
-                if parameter in ('max_tokens', 'max_completion_tokens', 'temperature', 'reasoning_effort', 'response_format'):
+                if parameter == 'reasoning_effort':
+                    raise RuntimeError('AI 服务不支持所选推理强度，请选择服务默认或其他档位。') from None
+                if parameter in ('max_tokens', 'max_completion_tokens', 'temperature', 'response_format'):
                     raise RuntimeError(f'AI 服务拒绝请求参数 {parameter}，请检查服务和模型兼容性。') from None
             message = {'AuthenticationError': 'AI 认证失败，请检查 API Key',
                        'PermissionDeniedError': 'AI 服务拒绝访问，请检查账号权限和模型',
@@ -181,6 +191,12 @@ class AIService:
                        'BadRequestError': 'AI 服务不接受当前模型或请求参数，请检查服务地址和模型'}.get(type(exc).__name__, 'AI 服务调用失败，请检查配置或稍后重试')
             raise RuntimeError(message) from None
 
+        choice = response.choices[0] if response.choices else None
+        if choice and choice.finish_reason == 'length':
+            if connection_test:
+                raise RuntimeError('AI 已响应，但测试达到生成上限。请降低推理强度后重试。')
+            raise RuntimeError('AI 响应达到生成上限，已被截断。请缩小请求范围或降低推理强度后重试。')
+        content = choice.message.content if choice else ''
         if not content or not content.strip():
             raise RuntimeError("AI 返回空响应")
         return content

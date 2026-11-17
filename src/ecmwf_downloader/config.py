@@ -42,6 +42,44 @@ def public_service_url(value: str) -> str:
         return ''
 
 
+ReasoningEffort = Literal['default', 'none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']
+
+_LOW_TO_HIGH = ('low', 'medium', 'high')
+_LOW_TO_MAX = (*_LOW_TO_HIGH, 'xhigh', 'max')
+_NONE_TO_XHIGH = ('none', *_LOW_TO_HIGH, 'xhigh')
+# 使用官方模型 ID 与已发布的快照。兼容服务的自定义模型使用服务默认值。
+AI_REASONING_EFFORTS: dict[str, tuple[ReasoningEffort, ...]] = {
+    'gpt-6-luna': ('none', *_LOW_TO_MAX),
+    'gpt-6-sol': ('none', *_LOW_TO_MAX),
+    'gpt-6-astra': _LOW_TO_MAX,
+    'gpt-6.1-terra': ('none', *_LOW_TO_MAX),
+    'gpt-6.1-sol': _LOW_TO_MAX,
+    'gpt-5.6': ('none', *_LOW_TO_MAX),
+    'gpt-5.6-sol': ('none', *_LOW_TO_MAX),
+    'gpt-5.6-terra': ('none', *_LOW_TO_MAX),
+    'gpt-5.6-luna': ('none', *_LOW_TO_MAX),
+    'gpt-5.5': _NONE_TO_XHIGH,
+    'gpt-5.5-2026-04-23': _NONE_TO_XHIGH,
+    'gpt-5.4': _NONE_TO_XHIGH,
+    'gpt-5.4-2026-03-05': _NONE_TO_XHIGH,
+    'gpt-5.4-mini': _NONE_TO_XHIGH,
+    'gpt-5.4-mini-2026-03-17': _NONE_TO_XHIGH,
+    'gpt-5.4-nano': _NONE_TO_XHIGH,
+    'gpt-5.2': _NONE_TO_XHIGH,
+    'gpt-5.2-2025-12-11': _NONE_TO_XHIGH,
+    'gpt-5.1': ('none', *_LOW_TO_HIGH),
+    'gpt-5': ('minimal', *_LOW_TO_HIGH),
+    'gpt-5-2025-08-07': ('minimal', *_LOW_TO_HIGH),
+}
+
+
+def reasoning_effort_for_model(model: str, effort: ReasoningEffort | None) -> ReasoningEffort:
+    model_id = model.rsplit('/', 1)[-1]
+    if effort is None and model_id == 'gpt-6-luna':
+        return 'none'
+    return effort if effort in AI_REASONING_EFFORTS.get(model_id, ()) else 'default'
+
+
 class PublicAISettings(BaseModel):
     model_config = ConfigDict(extra='forbid', strict=True)
     enabled: bool = False
@@ -51,6 +89,7 @@ class PublicAISettings(BaseModel):
     timeout: FiniteFloat = Field(default=120, gt=0)
     max_tokens: int = Field(default=4096, gt=0)
     json_mode: bool = True
+    reasoning_effort: ReasoningEffort | None = None
 
     @field_validator('base_url')
     @classmethod

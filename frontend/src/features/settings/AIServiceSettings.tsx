@@ -1,21 +1,35 @@
 import { useMutation } from '@tanstack/react-query'
 import { Loader2, Radio, Sparkles } from 'lucide-react'
-import { api, type AIConfigInput, type NetworkProxyConfig } from '../../lib/api'
+import { api, type AIConfigInput, type NetworkProxyConfig, type ReasoningEffort } from '../../lib/api'
 import { ErrorNotice } from '../../components'
+import CardSelect from '../../CardSelect'
+
+const effortLabels: Record<ReasoningEffort, string> = {
+  default: 'Service Default',
+  none: 'None',
+  minimal: 'Minimal',
+  low: 'Low',
+  medium: 'Medium',
+  high: 'High',
+  xhigh: 'XHigh',
+  max: 'Max',
+}
 
 type Props = {
   value: AIConfigInput
   network: NetworkProxyConfig
+  efforts: readonly ReasoningEffort[]
   onChange: (change: Partial<AIConfigInput>) => void
 }
 
-export default function AIServiceSettings({ value, network, onChange }: Props) {
+export default function AIServiceSettings({ value, network, efforts, onChange }: Props) {
   const body = {
     enabled: value.enabled,
     base_url: value.base_url.trim(),
     model: value.model.trim(),
     api_key: value.api_key?.trim(),
     json_mode: value.json_mode,
+    reasoning_effort: value.reasoning_effort,
     network_proxy: network,
   }
   const test = useMutation({ mutationFn: () => api.testAIConfig(body), gcTime: 0 })
@@ -45,6 +59,9 @@ export default function AIServiceSettings({ value, network, onChange }: Props) {
         onChange={event => edit({ base_url: event.target.value })} placeholder="https://api.openai.com/v1" required /></label>
       <label>模型名称<input aria-label="AI 模型名称" value={value.model}
         onChange={event => edit({ model: event.target.value })} placeholder="填写服务支持的模型 ID" required /></label>
+      <CardSelect label="Reasoning Effort" showLabel value={value.reasoning_effort}
+        options={(['default', ...efforts] as const).map(option => ({ value: option, label: effortLabels[option] }))}
+        onChange={reasoning_effort => edit({ reasoning_effort })} />
       <div className="ai-config-key">
         <label htmlFor="settings-ai-key">API Key</label>
         <div className="ai-key-controls">

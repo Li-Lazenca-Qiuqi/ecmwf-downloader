@@ -51,6 +51,7 @@ export type NetworkProxyConfig = { mode: 'direct' | 'system' | 'manual'; url: st
 export type Settings = {
   network_proxy: NetworkProxyConfig
   ai_config: AIConfig
+  ai_reasoning_efforts: Record<string, ReasoningEffort[]>
   database_path: string
   requests: { max_workers: number; max_retries: number; retry_delays: number[]; poll_interval: number }
   ai: { enabled?: boolean; model?: string }
@@ -70,8 +71,12 @@ export type Costing = {
   request_count?: number; estimated_count?: number; max_index?: number; over_limit_count?: number
 }
 export type DatasetCatalogue = { items: { id: string; title: string }[]; total: number; catalogue_total: number; source: 'online' | 'cache' | 'error' | 'builtin'; stale: boolean; error: string | null; fetched_at: string | null }
-export type AIConfig = { enabled: boolean; base_url: string; model: string; json_mode: boolean; has_api_key: boolean; sdk_available: boolean; ready: boolean }
-export type AIConfigInput = Pick<AIConfig, 'enabled' | 'base_url' | 'model' | 'json_mode'> & { api_key?: string }
+export type ReasoningEffort = 'default' | 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max'
+export type AIConfig = {
+  enabled: boolean; base_url: string; model: string; json_mode: boolean; reasoning_effort: ReasoningEffort
+  has_api_key: boolean; sdk_available: boolean; ready: boolean
+}
+export type AIConfigInput = Pick<AIConfig, 'enabled' | 'base_url' | 'model' | 'json_mode' | 'reasoning_effort'> & { api_key?: string }
 export type SettingsUpdate = {
   network_proxy?: NetworkProxyConfig
   ai?: Partial<Omit<AIConfigInput, 'api_key'>>

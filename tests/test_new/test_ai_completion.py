@@ -201,6 +201,84 @@ def test_luna_uses_supported_json_completion_parameters(container, monkeypatch, 
     assert limits == [128, 4096]
 
 
+def test_reasoning_effort_settings_round_trip_and_use_current_test_selection(container, monkeypatch):
+    model = 'openai/gpt-6-luna'
+    sent = []
+
+    def handler(request):
+        body = json.loads(request.content)
+        sent.append(body)
+        return httpx.Response(200, json={'id': 'test', 'object': 'chat.completion', 'created': 0, 'model': model,
+            'choices': [{'index': 0, 'finish_reason': 'stop', 'message': {'role': 'assistant', 'content': '{"flag":true}'}}]})
+
+    mock_sdk(monkeypatch, handler)
+    with TestClient(create_app(container, with_worker=False)) as client:
+        settings_path = '/api/v1/settings'
+        body = {'enabled': True, 'base_url': 'https://compatible.invalid/v1', 'model': model}
+        created = client.patch(settings_path, json={'values': {'ai': body}, 'ai_api_key': 'synthetic-key'})
+        assert created.status_code == 200
+        settings = created.json()
+        assert settings['ai_config']['reasoning_effort'] == 'none'
+        advertised = settings['ai_reasoning_efforts']
+        assert advertised['gpt-6-luna'] == ['none', 'low', 'medium', 'high', 'xhigh', 'max']
+        assert 'none' not in advertised['gpt-6-astra']
+        assert 'custom-model' not in advertised
+
+        for effort in (*advertised['gpt-6-luna'], 'default'):
+            before = container.config_path.read_bytes()
+            probe = client.post('/api/v1/ai/test', json={**body, 'api_key': 'synthetic-key', 'reasoning_effort': effort})
+            assert probe.status_code == 200, probe.text
+            expected = None if effort == 'default' else effort
+            assert sent[-1].get('reasoning_effort') == expected
+            assert ('reasoning_effort' in sent[-1]) == (effort != 'default')
+            assert sent[-1]['max_completion_tokens'] == (128 if effort == 'none' else 4096)
+            assert container.config_path.read_bytes() == before
+
+            saved = client.patch(settings_path, json={'values': {'ai': {'reasoning_effort': effort}}})
+            assert saved.status_code == 200, saved.text
+            assert client.get(settings_path).json()['ai_config']['reasoning_effort'] == effort
+            assert yaml.safe_load(container.config_path.read_text())['ai']['reasoning_effort'] == effort
+            response = client.post('/api/v1/ai/suggestions', json={'field_schema': field_schema(), 'user_request': '启用 flag'})
+            assert response.json()['suggestion'] == {'flag': True}
+            assert sent[-1].get('reasoning_effort') == expected
+            assert ('reasoning_effort' in sent[-1]) == (effort != 'default')
+
+        before = container.config_path.read_bytes()
+        invalid = client.patch(settings_path, json={'values': {'ai': {'reasoning_effort': 'minimal'}}})
+        assert invalid.status_code == 422
+        assert container.config_path.read_bytes() == before
+        assert client.patch(settings_path, json={'values': {'ai': {'reasoning_effort': 'max'}}}).status_code == 200
+        switched = client.patch(settings_path, json={'values': {'ai': {'model': 'custom-model'}}})
+        assert switched.json()['ai_config']['reasoning_effort'] == 'default'
+        assert switched.json()['ai']['reasoning_effort'] == 'default'
+
+
+@pytest.mark.parametrize(('failure', 'message'), [
+    ('rejected', '不支持所选推理强度'),
+    ('timeout', '请求超时'),
+    ('truncated', '测试达到生成上限'),
+])
+def test_reasoning_connection_distinguishes_provider_errors(container, monkeypatch, failure, message):
+    def handler(request):
+        assert json.loads(request.content)['reasoning_effort'] == 'max'
+        if failure == 'rejected':
+            return httpx.Response(400, json={'error': {'param': 'reasoning_effort', 'message': 'private-test-value'}})
+        if failure == 'timeout':
+            raise httpx.ReadTimeout('private-test-value', request=request)
+        return httpx.Response(200, json={'id': 'test', 'object': 'chat.completion', 'created': 0, 'model': 'gpt-6-luna',
+            'choices': [{'index': 0, 'finish_reason': 'length', 'message': {'role': 'assistant', 'content': None}}]})
+
+    mock_sdk(monkeypatch, handler)
+    with TestClient(create_app(container, with_worker=False)) as client:
+        result = client.post('/api/v1/ai/test', json={
+            'enabled': False, 'base_url': 'https://compatible.invalid/v1', 'model': 'gpt-6-luna',
+            'api_key': 'synthetic-key', 'reasoning_effort': 'max',
+        })
+        assert result.status_code == 503
+        assert message in result.json()['detail']
+        assert 'private-test-value' not in result.text
+
+
 @pytest.mark.parametrize('json_mode', [True, False])
 def test_completion_sends_current_selection_and_validates_real_sdk_response(container, monkeypatch, json_mode):
     container.settings.ai = {'enabled': True, 'base_url': 'https://example.invalid/v1', 'model': 'test-model', 'json_mode': json_mode}

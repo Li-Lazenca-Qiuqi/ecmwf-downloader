@@ -18,6 +18,7 @@ from ecmwf_downloader.config import (
     SettingsIOError,
     load_settings,
     parse_app_config,
+    reasoning_effort_for_model,
     validate_app_config,
 )
 from ecmwf_downloader.infrastructure.db import Database
@@ -88,6 +89,14 @@ class AppContainer:
                     data[section] = {**current, **section_values}
                     # 独立进程写入的其他值在重启时读取，本进程只应用本次更新。
                     runtime[section] = {**runtime[section], **section_values}
+                if 'ai' in values and {'model', 'reasoning_effort'} & values['ai'].keys():
+                    for ai_config in (data['ai'], runtime['ai']):
+                        effort = ai_config.get('reasoning_effort')
+                        model = ai_config.get('model') or self.ai.configuration()['model']
+                        if effort is not None and reasoning_effort_for_model(model, effort) != effort:
+                            if 'reasoning_effort' in values['ai']:
+                                raise SettingsError('当前模型不支持该推理强度，请选择服务默认或其他档位。')
+                            ai_config['reasoning_effort'] = 'default'
                 validate_app_config(data)
                 updated = validate_app_config(runtime)
                 if values.get('ai', {}).get('enabled') or ai_key is not None:

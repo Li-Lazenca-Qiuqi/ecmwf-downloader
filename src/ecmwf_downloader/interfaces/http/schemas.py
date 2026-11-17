@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator
-from ecmwf_downloader.config import NetworkProxySettings, service_url
+from ecmwf_downloader.config import NetworkProxySettings, ReasoningEffort, service_url
 
 from ecmwf_downloader.domain.models import AccountData, SplitStrategy, TaskData, TaskStatus
 
@@ -73,6 +73,7 @@ class AIConfigBody(BaseModel):
     model: str = Field(min_length=1, max_length=200)
     api_key: Optional[SecretStr] = None
     json_mode: bool = True
+    reasoning_effort: ReasoningEffort | None = None
 
     @field_validator('base_url')
     @classmethod

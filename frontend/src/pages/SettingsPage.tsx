@@ -1,7 +1,9 @@
 import { useState } from 'react'
+import { createPortal } from 'react-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api, type AIConfigInput, type NetworkProxyConfig, type SettingsUpdate } from '../lib/api'
 import { ErrorNotice, Loading } from '../components'
+import SuccessToast, { useSuccessToast } from '../SuccessToast'
 import AIServiceSettings from '../features/settings/AIServiceSettings'
 import NetworkProxySettings from '../features/settings/NetworkProxySettings'
 
@@ -21,6 +23,7 @@ export default function SettingsPage() {
 
 function SettingsForm({ current, savedAIKey }: { current: Awaited<ReturnType<typeof api.settings>>; savedAIKey: string }) {
   const client = useQueryClient()
+  const toast = useSuccessToast()
   const [proxyDraft, setProxyDraft] = useState<Partial<NetworkProxyConfig>>({})
   const [aiDraft, setAIDraft] = useState<Partial<AIConfigInput>>({})
   const [pollDraft, setPollDraft] = useState<string>()
@@ -28,6 +31,11 @@ function SettingsForm({ current, savedAIKey }: { current: Awaited<ReturnType<typ
   const proxy = { ...current.network_proxy, ...proxyDraft }
   const network = { mode: proxy.mode, url: proxy.mode === 'manual' ? proxy.url.trim() : current.network_proxy.url }
   const ai = { ...current.ai_config, api_key: savedAIKey, ...aiDraft }
+  const model = ai.model.trim()
+  const modelId = model.slice(model.lastIndexOf('/') + 1)
+  const efforts = Object.hasOwn(current.ai_reasoning_efforts, modelId) ? current.ai_reasoning_efforts[modelId] : []
+  const effort = efforts.includes(ai.reasoning_effort) ? ai.reasoning_effort : 'default'
+  const modelChanged = model !== current.ai_config.model
   const aiKey = ai.api_key?.trim() ?? ''
   const aiKeyChanged = aiKey !== savedAIKey
   const pollInterval = pollDraft ?? String(current.requests.poll_interval)
@@ -39,7 +47,8 @@ function SettingsForm({ current, savedAIKey }: { current: Awaited<ReturnType<typ
   const aiChanges = {
     ...(ai.enabled !== current.ai_config.enabled ? { enabled: ai.enabled } : {}),
     ...(ai.base_url.trim() !== current.ai_config.base_url ? { base_url: ai.base_url.trim() } : {}),
-    ...(ai.model.trim() !== current.ai_config.model ? { model: ai.model.trim() } : {}),
+    ...(modelChanged ? { model } : {}),
+    ...(modelChanged || effort !== current.ai_config.reasoning_effort ? { reasoning_effort: effort } : {}),
     ...(ai.json_mode !== current.ai_config.json_mode ? { json_mode: ai.json_mode } : {}),
   }
   const proxyChanged = network.mode !== current.network_proxy.mode || network.url !== current.network_proxy.url
@@ -59,6 +68,7 @@ function SettingsForm({ current, savedAIKey }: { current: Awaited<ReturnType<typ
       setAIDraft({})
       setPollDraft(undefined)
       setRetriesDraft(undefined)
+      toast.show('配置已保存')
       if (values.network_proxy) {
         void client.invalidateQueries({ queryKey: ['datasets'] })
         void client.invalidateQueries({ queryKey: ['request-schema'] })
@@ -78,12 +88,12 @@ function SettingsForm({ current, savedAIKey }: { current: Awaited<ReturnType<typ
       </button>
     </div>
     <ErrorNotice error={save.error} />
-    {save.isSuccess && <p className="notice" role="status">配置已保存。</p>}
+    {createPortal(<SuccessToast message={toast.message} />, document.body)}
     <fieldset disabled={save.isPending}>
       <NetworkProxySettings value={proxy} testConfig={network}
         onChange={change => { save.reset(); setProxyDraft(draft => ({ ...draft, ...change })) }} />
-      <AIServiceSettings value={ai} network={network}
-        onChange={change => setAIDraft(draft => ({ ...draft, ...change }))} />
+      <AIServiceSettings value={{ ...ai, reasoning_effort: effort }} efforts={efforts} network={network}
+        onChange={change => { save.reset(); setAIDraft(draft => ({ ...draft, ...change })) }} />
       <section className="panel settings-requests" aria-labelledby="settings-requests-title">
         <h2 id="settings-requests-title">请求监视</h2>
         <div className="settings-request-fields">
